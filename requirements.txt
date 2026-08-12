@@ -1,0 +1,26 @@
+ultralytics>=8.2.0
+
+# PENTING: `roboflow` menarik opencv-python-headless, yang menimpa
+# opencv-python sehingga cv2.imshow() mati (mode webcam tidak jalan).
+# Install opencv-python SETELAH roboflow, atau jalankan:
+#   pip uninstall -y opencv-python-headless opencv-python
+#   pip install opencv-python==4.10.0.84
+opencv-python>=4.9.0
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
+streamlit>=1.36.0
+python-dotenv>=1.0.1
+roboflow>=1.1.30
+numpy>=1.26.0
+Pillow>=10.3.0
+requests>=2.32.0
+
+# Runtime backend OpenVINO (src/openvino_detector.py). Cukup untuk *menjalankan*
+# IR yang sudah di-export; tanpa ini backend `openvino` / `openvino-int8` mati.
+openvino>=2024.0.0
+# Dibutuhkan hanya saat *membuat* IR INT8 (scripts/export_openvino.py) —
+# NNCF yang melakukan post-training quantization. Tidak dipakai saat inference.
+nncf>=2.9.0
+# Export OpenVINO lewat Ultralytics melewati ONNX sebagai format perantara.
+onnx>=1.16.0

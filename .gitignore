@@ -1,0 +1,31 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+.env
+frame.jpg
+
+# Model artifacts (jangan commit — download via script)
+# Pola tanpa slash berlaku di semua level, jadi yolov8n.pt di root ikut terjaring.
+*.pt
+*.onnx
+*.tflite
+
+# OpenVINO IR hasil scripts/export_openvino.py (best.bin bisa belasan MB)
+models/*_openvino_model/
+
+# Roboflow downloaded dataset artifacts
+datasets/
+ppes-*/
+*.zip
+
+# Runtime output
+outputs/
+runs/
+logs/
+*.mp4
+*.avi
+
+# IDE
+.idea/
+.vscode/

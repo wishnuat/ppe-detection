@@ -1,0 +1,16 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+.env
+.git/
+.gitignore
+outputs/
+docs/
+runs/
+datasets/
+tests/
+*.mp4
+*.jpg
+frame.jpg
+models/*.pt
