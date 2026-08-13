@@ -67,7 +67,7 @@ class RoboflowDetector(PPEDetector):
                 params={
                     "api_key": self.api_key,
                     # endpoint ini memakai skala persen
-                    "confidence": int(self.conf * 100),
+                    "confidence": int(self.detection_floor * 100),
                     "overlap": int(self.iou * 100),
                 },
                 data=base64.b64encode(buf.tobytes()),

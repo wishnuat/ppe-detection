@@ -215,7 +215,9 @@ class OpenVINODetector(PPEDetector):
         class_ids = class_scores.argmax(axis=1)
         scores = class_scores[np.arange(class_scores.shape[0]), class_ids]
 
-        keep_mask = scores >= self.conf
+        # Pakai ambang terendah di antara conf global & override per kategori;
+        # penyaringan final per kategori dikerjakan `_finalize`.
+        keep_mask = scores >= self.detection_floor
         if not keep_mask.any():
             return []
         boxes_xywh = boxes_xywh[keep_mask]

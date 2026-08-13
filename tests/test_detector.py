@@ -21,8 +21,10 @@ from src.detector import (
 class _FilterOnly(PPEDetector):
     """Akses `_finalize` tanpa memuat weights."""
 
-    def __init__(self, enabled=None):
+    def __init__(self, enabled=None, conf=0.35, category_conf=None):
         self.enabled_categories = enabled
+        self.conf = conf
+        self.category_conf = category_conf
 
 
 def make(label: str) -> Detection:
@@ -121,6 +123,46 @@ def test_filter_can_hide_person_boxes():
 def test_person_is_selectable_but_not_a_ppe_class():
     assert "person" in SELECTABLE_CATEGORIES
     assert "person" not in PPE_CLASSES
+
+
+def _det(label: str, confidence: float) -> Detection:
+    category, is_violation = classify_label(label)
+    return Detection(
+        label=label,
+        category=category,
+        confidence=confidence,
+        bbox=[0, 0, 10, 10],
+        is_violation=is_violation,
+    )
+
+
+def test_detection_floor_without_overrides_is_global_conf():
+    assert _FilterOnly(conf=0.4).detection_floor == 0.4
+
+
+def test_detection_floor_follows_lowest_category_threshold():
+    # Model harus dijalankan di ambang terendah, kalau tidak deteksi glove
+    # sudah hilang sebelum sempat difilter.
+    det = _FilterOnly(conf=0.5, category_conf={"glove": 0.2})
+    assert det.detection_floor == 0.2
+    assert det.threshold_for("glove") == 0.2
+    assert det.threshold_for("helmet") == 0.5
+
+
+def test_category_conf_lowers_threshold_for_one_category_only():
+    det = _FilterOnly(conf=0.5, category_conf={"glove": 0.2})
+    out = det._finalize(
+        DetectionResult(detections=[_det("hand_noglove", 0.30), _det("head_nohelmet", 0.35)])
+    )
+    assert {d.label for d in out.detections} == {"hand_noglove"}
+    assert out.compliance["glove"] == "PELANGGARAN"
+    assert out.compliance["helmet"] == "TIDAK TERDETEKSI"
+
+
+def test_category_conf_can_also_raise_threshold():
+    det = _FilterOnly(conf=0.3, category_conf={"helmet": 0.7})
+    out = det._finalize(DetectionResult(detections=[_det("head_helmet", 0.5)]))
+    assert out.detections == []
 
 
 def test_boots_and_barefoot_map_to_same_category():

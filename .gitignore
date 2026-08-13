@@ -19,6 +19,9 @@ datasets/
 ppes-*/
 *.zip
 
+# Profil setting UI — isinya preferensi lokal per instalasi, bukan kode
+config/ui_profiles.json
+
 # Runtime output
 outputs/
 runs/

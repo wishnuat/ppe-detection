@@ -9,7 +9,8 @@ opencv-python>=4.9.0
 fastapi>=0.111.0
 uvicorn[standard]>=0.30.0
 python-multipart>=0.0.9
-streamlit>=1.36.0
+# >=1.38: UI memakai st.audio(autoplay=True) untuk bunyi alarm.
+streamlit>=1.38.0
 python-dotenv>=1.0.1
 roboflow>=1.1.30
 numpy>=1.26.0

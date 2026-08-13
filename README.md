@@ -123,10 +123,11 @@ PPE Detection/
 │   ├── openvino_detector.py # Backend OpenVINO IR (FP32/INT8), interface sama
 │   ├── remote.py         # RoboflowDetector — backend serverless, interface sama
 │   ├── backends.py       # build_detector() — pemilih backend untuk CLI/API/UI
+│   ├── alerts.py         # AlertEngine (debounce, cooldown) + SessionStats + CSV
 │   └── cli.py            # CLI: python -m src.cli image|video|webcam
 ├── app/
 │   ├── api.py            # FastAPI: /health, /predict, /predict/image
-│   └── streamlit_app.py  # Streamlit demo UI (realtime + panel filter kategori)
+│   └── streamlit_app.py  # Streamlit UI: sensitivitas, alert, log, rekam sesi
 ├── scripts/
 │   ├── download_dataset.py # Download dataset YOLOv8 dari Roboflow
 │   ├── train.py            # Training lokal -> models/best.pt
@@ -409,29 +410,65 @@ Contoh response `/predict` (dipotong):
 streamlit run app/streamlit_app.py
 ```
 
-Buka **http://localhost:8501**. Sidebar berisi:
+Buka **http://localhost:8501**. Sidebar dibagi lima panel:
 
-- **Mode input** — Gambar / Video / Webcam
-- **Backend inference** — OpenVINO INT8 / OpenVINO FP32 / PyTorch / Roboflow
-  serverless. Detector di-cache per (backend, device) karena compile OpenVINO
-  makan beberapa detik dan Streamlit me-rerun script tiap interaksi.
-- **Device OpenVINO** — CPU / GPU (iGPU Intel) / AUTO, muncul saat backend
-  OpenVINO dipilih
-- **Confidence threshold**
-- **🎚️ Kategori yang dideteksi** — checkbox per kategori. Uncheck *Sarung
-  tangan*, misalnya, dan deteksi glove hilang dari bounding box, tabel
-  detail, dan kartu compliance sekaligus. Ada tombol *Pilih semua* /
-  *Kosongkan*.
+**🧠 Model & backend** — OpenVINO INT8 / OpenVINO FP32 / PyTorch / Roboflow
+serverless, plus *Device OpenVINO* (CPU / GPU iGPU Intel / AUTO) saat backend
+OpenVINO dipilih. Detector di-cache per (backend, device) karena compile
+OpenVINO makan beberapa detik dan Streamlit me-rerun script tiap interaksi.
 
-Mode **Webcam** punya dua sub-mode:
+**🎚️ Sensitivitas**
 
-| Sub-mode | Cara kerja | Kapan dipakai |
-|----------|-----------|----------------|
-| **Realtime** | Server Streamlit membaca kamera langsung dan men-stream frame teranotasi ke browser, lengkap dengan FPS, banner pelanggaran, dan kartu compliance yang ter-update tiap frame. Ada kontrol *Camera index*, *Batas FPS*, tombol Mulai/Stop. | Streamlit jalan di mesin yang sama dengan kamera (laptop, edge box) |
-| **Snapshot** | Memakai kamera **browser** via `st.camera_input` | Streamlit di-deploy ke server remote yang tidak punya kamera |
+- **Preset** — 🟢 Longgar (0.20/0.50) · 🟡 Seimbang (0.35/0.45) · 🔴 Ketat
+  (0.55/0.40). Menggeser slider manual otomatis mengubah preset jadi *Custom*.
+- **Confidence** & **IoU/NMS threshold**.
+- **Ambang khusus per kategori** — slider sendiri untuk tiap kategori. Ini
+  yang paling berguna di model ini: kelas negatif berobjek kecil
+  (`hand_noglove` mAP 0.26, `No_Glasses` 0.41) butuh ambang lebih rendah,
+  sementara kelas kuat seperti `boots` bisa dinaikkan supaya tidak berisik.
+  Model dijalankan pada ambang **terendah** di antara semua kategori
+  (`detection_floor`), lalu tiap deteksi disaring dengan ambang kategorinya
+  masing-masing — jadi menurunkan satu kategori tidak membuat kategori lain
+  ikut ramai.
 
-> Filter kategori diterapkan di layer detector (`enabled_categories`), bukan
-> hanya di UI — jadi CLI, REST API, dan UI berperilaku sama.
+**👁️ Kategori yang dideteksi** — checkbox per kategori. Uncheck *Sarung
+tangan*, misalnya, dan deteksi glove hilang dari bounding box, tabel detail,
+dan kartu compliance sekaligus. Ada tombol *Pilih semua* / *Kosongkan*.
+
+**🚨 Alert** — terpisah dari panel deteksi, karena "digambar & dicatat" tidak
+harus berarti "dibunyikan alarm":
+
+| Kontrol | Fungsi |
+|---------|--------|
+| Checkbox per kategori | Hanya kategori tercentang yang memicu alarm. Rompi & harness tidak muncul di sini — dataset tidak punya label pelanggarannya. |
+| **Pelanggaran harus bertahan (frame)** | Peredam kedipan. Deteksi per-frame gampang berkelip (orang menoleh, frame buram); alarm baru bunyi setelah pelanggaran bertahan N frame berturut-turut. |
+| **Cooldown per kategori** | Jeda minimum sebelum kategori yang sama boleh dialarmkan lagi — mencegah satu pelanggaran jadi ratusan baris log. |
+| **Hanya alarm kalau ada orang di frame** | Meredam alarm dari helm/rompi yang tergeletak. Butuh kategori *Orang* aktif. |
+| **Bunyikan suara** | Nada alarm dibangkitkan runtime (`st.audio(autoplay=True)`), tanpa file aset. |
+| **Simpan snapshot bukti** | Frame teranotasi saat alarm disimpan ke `outputs/violations/`. |
+
+**💾 Profil setting** — simpan seluruh kombinasi di atas dengan nama
+(mis. *Gudang malam*, *Area las*) ke `config/ui_profiles.json`, lalu muat
+lagi kapan pun. Berguna kalau satu instalasi dipakai untuk beberapa area
+kerja dengan aturan APD berbeda.
+
+Di area utama, tiap mode menampilkan **metrik sesi** (FPS, frame diproses,
+% kepatuhan, jumlah alarm), **log pelanggaran** yang bisa diunduh sebagai
+CSV, dan galeri **snapshot bukti** terakhir.
+
+Per mode:
+
+| Mode | Tambahan |
+|------|----------|
+| **Gambar** | Unduh gambar teranotasi (JPG) dan hasil mentah (JSON). Debounce dimatikan — satu gambar = satu kesempatan. |
+| **Video** | Progress bar + preview berjalan, opsi *proses tiap N frame* untuk video panjang, unduh mp4 hasil. Kolom waktu di log memakai posisi **di dalam video** (mm:ss), dan cooldown dihitung pada jam video, bukan jam pemrosesan. |
+| **Webcam → Realtime** | Kamera mesin yang menjalankan Streamlit. Kontrol *Camera index*, *Batas FPS*, *Cermin*, dan **⏺️ Rekam sesi ke mp4** → hasilnya bisa diunduh setelah Stop (tersimpan di `outputs/sessions/`). |
+| **Webcam → Snapshot** | Kamera **browser** via `st.camera_input`, aman untuk deploy remote. |
+
+> Filter kategori dan ambang per kategori diterapkan di layer detector
+> (`enabled_categories`, `category_conf`), bukan hanya di UI — jadi CLI,
+> REST API, dan UI berperilaku sama. Kebijakan alarm ada di `src/alerts.py`
+> (`AlertEngine`), bebas Streamlit, jadi bisa dipakai ulang worker CCTV.
 
 ### Docker (semua sekaligus)
 
@@ -463,6 +500,12 @@ pytest tests -q
 `tests/test_detector.py` menguji taksonomi label dan logika compliance
 (termasuk aturan "satu pelanggaran mengalahkan deteksi positif") tanpa perlu
 file `.pt`, jadi test tetap jalan di CI yang tidak punya weights.
+
+`tests/test_alerts.py` menguji kebijakan alarm di `src/alerts.py` — debounce
+N-frame berturut-turut (termasuk streak yang hangus saat pelanggaran hilang
+sekejap), cooldown per kategori, pemilihan kategori yang dialarmkan, gating
+"harus ada orang", isi event (confidence tertinggi), export CSV, dan
+perhitungan `compliance_rate` pada `SessionStats`.
 
 `tests/test_backends.py` menguji dua hal, juga tanpa perlu weights maupun
 runtime OpenVINO:

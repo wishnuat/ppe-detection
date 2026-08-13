@@ -101,6 +101,15 @@ class DetectionResult:
 
 
 class PPEDetector:
+    # Default level kelas: backend turunan (OpenVINO/Roboflow) dan test tidak
+    # semuanya memanggil __init__ ini, tapi semuanya lewat `_finalize`.
+    conf: float = 0.35
+    iou: float = 0.45
+    enabled_categories: set[str] | None = None
+    # Ambang confidence khusus per kategori, mis. {"glove": 0.20}. Kategori
+    # yang tidak terdaftar memakai `self.conf`.
+    category_conf: dict[str, float] | None = None
+
     def __init__(
         self,
         model_path: str | None = None,
@@ -129,10 +138,26 @@ class PPEDetector:
             names = {i: n for i, n in enumerate(names)}
         return dict(names)
 
+    # ---------- sensitivitas ----------
+    @property
+    def detection_floor(self) -> float:
+        """Ambang terendah yang boleh dilewatkan model ke tahap filter.
+
+        Kalau ada kategori yang ambangnya lebih rendah dari `conf` global,
+        model harus dijalankan di ambang terendah itu — kalau tidak, deteksi
+        yang seharusnya lolos sudah dibuang sebelum sempat difilter.
+        """
+        overrides = self.category_conf or {}
+        return min([self.conf, *overrides.values()]) if overrides else self.conf
+
+    def threshold_for(self, category: str) -> float:
+        """Ambang confidence yang berlaku untuk satu kategori."""
+        return (self.category_conf or {}).get(category, self.conf)
+
     # ---------- core ----------
     def predict_frame(self, frame: np.ndarray) -> DetectionResult:
         results = self.model.predict(
-            source=frame, conf=self.conf, iou=self.iou, verbose=False
+            source=frame, conf=self.detection_floor, iou=self.iou, verbose=False
         )
         r = results[0]
         h, w = frame.shape[:2]
@@ -159,10 +184,16 @@ class PPEDetector:
         return self._finalize(out)
 
     def _finalize(self, out: DetectionResult) -> DetectionResult:
-        """Terapkan filter kategori lalu hitung ulang compliance.
+        """Terapkan ambang per kategori + filter kategori, lalu hitung compliance.
 
         Dipanggil semua backend supaya CLI, API, dan UI konsisten.
         """
+        if self.category_conf:
+            out.detections = [
+                d for d in out.detections
+                if d.confidence >= self.threshold_for(d.category)
+            ]
+
         allowed = self.enabled_categories
         if allowed is not None:
             allowed = set(allowed)
@@ -273,13 +304,24 @@ class PPEDetector:
         if not cap.isOpened():
             raise RuntimeError(f"Gagal membuka kamera index {camera_index}")
 
+        # FPS rekaman tidak bisa ditebak di muka: tergantung backend, resolusi,
+        # dan beban CPU saat itu. Kalau di-hardcode, durasi video hasil tidak
+        # sama dengan durasi kejadian aslinya (kecepetan atau kelambatan).
+        # Jadi frame pertama ditahan di memori dulu untuk mengukur FPS nyata,
+        # baru writer dibuat dan buffer-nya di-flush.
         writer = None
+        pending: list[np.ndarray] = []
+        calib_t0 = time.perf_counter()
         if save_video:
             Path(save_video).parent.mkdir(parents=True, exist_ok=True)
-            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640
-            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
-            writer = cv2.VideoWriter(
-                save_video, cv2.VideoWriter_fourcc(*"mp4v"), 15.0, (w, h)
+
+        def open_writer(frame: np.ndarray) -> cv2.VideoWriter:
+            measured = len(pending) / max(time.perf_counter() - calib_t0, 1e-6)
+            h, w = frame.shape[:2]
+            print(f"[INFO] FPS rekaman terukur: {measured:.1f}")
+            return cv2.VideoWriter(
+                save_video, cv2.VideoWriter_fourcc(*"mp4v"),
+                max(1.0, measured), (w, h),
             )
 
         print("[INFO] Tekan 'q' di window untuk berhenti, 's' untuk simpan snapshot.")
@@ -309,8 +351,17 @@ class PPEDetector:
                     print(f"[OK]    {ppe}: pelanggaran selesai")
                 prev_violations = violations
 
-                if writer is not None:
-                    writer.write(annotated)
+                if save_video:
+                    if writer is not None:
+                        writer.write(annotated)
+                    else:
+                        pending.append(annotated)
+                        # ~30 frame cukup untuk estimasi yang stabil.
+                        if len(pending) >= 30:
+                            writer = open_writer(annotated)
+                            for buffered in pending:
+                                writer.write(buffered)
+                            pending.clear()
 
                 cv2.imshow("PPE Detection", annotated)
                 key = cv2.waitKey(1) & 0xFF
@@ -323,8 +374,14 @@ class PPEDetector:
                     print(f"[OK] Snapshot disimpan: {snap}")
         finally:
             cap.release()
+            # Sesi lebih pendek dari periode kalibrasi: tetap simpan apa adanya.
+            if writer is None and pending:
+                writer = open_writer(pending[0])
+                for buffered in pending:
+                    writer.write(buffered)
             if writer is not None:
                 writer.release()
+                print(f"[OK] Rekaman disimpan: {save_video}")
             # Jangan biarkan cleanup menutupi error asli (mis. OpenCV headless
             # tanpa dukungan GUI).
             try:
