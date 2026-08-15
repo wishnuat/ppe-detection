@@ -2,13 +2,7 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    # Matplotlib & Ultralytics menulis config ke $HOME saat import. Di HuggingFace
-    # Spaces container jalan sebagai UID 1000 tanpa home yang writable, dan tanpa
-    # ini import ultralytics gagal dengan PermissionError.
-    HOME=/app \
-    MPLCONFIGDIR=/tmp/mpl \
-    YOLO_CONFIG_DIR=/tmp/ultralytics
+    PIP_NO_CACHE_DIR=1
 
 # System deps untuk OpenCV + ffmpeg (video I/O)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -41,13 +35,35 @@ COPY scripts ./scripts
 # mengembalikan 503 dengan pesan bahwa weights belum ada.
 COPY models ./models
 
-RUN mkdir -p /app/outputs /tmp/mpl /tmp/ultralytics && \
-    chmod -R 777 /app/outputs
+# HuggingFace Spaces menjalankan container sebagai UID 1000, bukan root.
+# Matplotlib, Ultralytics, dan fontconfig semuanya menulis cache ke $HOME saat
+# import — kalau tidak writable, ketiganya jatuh ke fallback dan membanjiri log
+# dengan warning, plus font cache matplotlib dibangun ulang tiap start.
+#
+# Membuat user 1000 dengan home sungguhan menyelesaikan ketiganya sekaligus,
+# dan lebih rapi daripada menyebar chmod 777 ke /tmp.
+RUN useradd --create-home --uid 1000 appuser
+
+ENV HOME=/home/appuser \
+    XDG_CACHE_HOME=/home/appuser/.cache \
+    MPLCONFIGDIR=/home/appuser/.cache/matplotlib \
+    YOLO_CONFIG_DIR=/home/appuser/.config/Ultralytics
+
+RUN mkdir -p /app/outputs "$MPLCONFIGDIR" "$YOLO_CONFIG_DIR" && \
+    chown -R appuser:appuser /app /home/appuser
+
+USER appuser
 
 # 8000 = default lokal & docker-compose. 7860 = port yang diharapkan
 # HuggingFace Spaces (di-set lewat env PORT, lihat README).
 EXPOSE 8000 7860
 
-# Shell form supaya ${PORT} diekspansi. Satu container melayani API *dan*
-# frontend statis — app/api.py me-mount web/ di "/".
-CMD uvicorn app.api:app --host 0.0.0.0 --port ${PORT:-8000}
+# Satu container melayani API *dan* frontend statis — app/api.py me-mount
+# web/ di "/".
+#
+# Dibungkus `sh -c` (bukan shell form telanjang) supaya ${PORT} tetap
+# diekspansi tanpa memicu peringatan JSONArgsRecommended dari buildkit.
+# `exec` membuat uvicorn menggantikan sh sebagai PID 1, jadi SIGTERM dari
+# `docker stop` sampai ke uvicorn dan shutdown-nya bersih — tanpa itu sh
+# menelan sinyalnya dan container baru mati setelah timeout 10 detik.
+CMD ["sh", "-c", "exec uvicorn app.api:app --host 0.0.0.0 --port ${PORT:-8000}"]

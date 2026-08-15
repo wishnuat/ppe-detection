@@ -175,7 +175,7 @@ PPE Detection/
 │   ├── benchmark.py        # Ukur latency/FPS tiap backend -> docs/BENCHMARK.md
 │   └── evaluate.py         # Ukur mAP tiap varian model  -> docs/METRICS.md
 ├── datasets/             # (dataset hasil export, tidak di-commit)
-├── models/               # (weight .pt & IR disimpan di sini, tidak di-commit)
+├── models/               # best.pt + IR INT8 ikut di-commit; FP32 & checkpoint tidak
 ├── main.py               # ⚠️ skrip awal (Roboflow serverless, model lama
 │                         #    `ppes-kaxsi/8`). Sudah digantikan src/cli.py —
 │                         #    disimpan sebagai jejak iterasi, jangan dipakai.
@@ -185,9 +185,11 @@ PPE Detection/
 └── .env.example
 ```
 
-> **Weights tidak ikut di-commit** (`*.pt` ada di `.gitignore`). Setelah clone,
-> `models/` masih kosong dan API akan menjawab 503 sampai kamu menaruh
-> `models/best.pt` — lihat [Setup langkah 3](#3-siapkan-weights-modelsbestpt).
+> **Model ikut di repo.** `models/best.pt` (6,2 MB) dan IR OpenVINO INT8
+> (3,5 MB) sengaja dikecualikan dari aturan `.gitignore`, jadi `git clone` →
+> `pip install` → `uvicorn` langsung jalan tanpa training. Yang tetap tidak
+> di-commit: `yolov8n.pt`, checkpoint training, dan IR FP32 (12 MB, bisa
+> diregenerasi dengan `scripts/export_openvino.py --no-int8`).
 
 ---
 
@@ -609,16 +611,19 @@ Tiga hal yang membedakan image deploy dari `docker compose` lokal:
    `./models`, jadi tidak ada duplikasi kerja.
 2. **torch versi CPU** dipasang dari index PyTorch sebelum `requirements.txt`.
    Tanpa itu, PyPI memberi wheel CUDA ±2,5 GB yang tidak terpakai sama sekali.
-3. **`HOME`, `MPLCONFIGDIR`, `YOLO_CONFIG_DIR`** diarahkan ke lokasi writable.
-   HuggingFace menjalankan container sebagai UID 1000 tanpa home yang bisa
-   ditulis, dan `import ultralytics` gagal dengan `PermissionError` tanpa ini.
+   Terverifikasi di dalam image: `torch 2.13.0+cpu`, `torch.version.cuda = None`.
+3. **User non-root UID 1000** (`useradd --uid 1000 appuser`) dengan `HOME`,
+   `XDG_CACHE_HOME`, `MPLCONFIGDIR`, dan `YOLO_CONFIG_DIR` di bawahnya.
+   HuggingFace menjalankan container sebagai UID 1000; tanpa home yang writable,
+   Ultralytics, matplotlib, dan fontconfig sama-sama jatuh ke fallback dan
+   membanjiri log (`is not writable`, `No writable cache directories`), plus
+   font cache matplotlib dibangun ulang setiap start.
 
 ### HuggingFace Spaces
 
 1. Buat Space baru → SDK **Docker** → Blank.
-2. Pastikan `models/best.pt` ada di working tree (weights di-gitignore untuk
-   GitHub; untuk Space, commit paksa dengan `git add -f models/best.pt` —
-   ukurannya ~6 MB, aman tanpa Git LFS).
+2. Model sudah ikut di repo (`models/best.pt` 6,2 MB + IR INT8 3,5 MB), jadi
+   tidak ada langkah tambahan — cukup push. Total repo ~8,7 MB, tanpa Git LFS.
 3. Tambahkan `README.md` di root Space dengan frontmatter ini (HuggingFace
    membaca `app_port` dari sini):
 
@@ -637,7 +642,7 @@ Tiga hal yang membedakan image deploy dari `docker compose` lokal:
 
 CPU Basic (2 vCPU, gratis) cukup untuk mode gambar dan webcam pelan. Untuk
 webcam yang lebih lancar, set `INFERENCE_BACKEND=openvino-int8` di Variables —
-tapi IR-nya harus ikut di-commit juga (`git add -f models/best_int8_openvino_model`).
+IR-nya sudah ikut di repo, jadi langsung berlaku setelah restart Space.
 
 ### Railway
 
@@ -649,11 +654,39 @@ railway up
 Railway mendeteksi `Dockerfile` sendiri dan menyuntikkan `PORT`, jadi tidak ada
 konfigurasi tambahan. Set `INFERENCE_BACKEND` di dashboard kalau ingin OpenVINO.
 
-> **Belum diuji end-to-end.** Docker Desktop tidak aktif di mesin ini saat
-> `Dockerfile` ditulis, jadi image-nya belum pernah benar-benar di-build.
-> Semua yang di atas berasal dari pembacaan konfigurasi, bukan dari build yang
-> berhasil — verifikasi dengan `docker build -t ppe-detection .` sebelum
-> mengandalkannya untuk demo penting.
+### Status verifikasi
+
+Image sudah benar-benar di-build dan dijalankan, bukan sekadar ditulis:
+
+| Yang diuji | Hasil |
+|---|---|
+| `docker build -t ppe-detection .` | sukses, tanpa warning |
+| torch di dalam image | `2.13.0+cpu`, `cuda = None` — wheel CUDA tidak ikut |
+| Container sebagai **UID 1000** (kondisi HF Spaces) | start bersih, tanpa warning permission |
+| `INFERENCE_BACKEND=openvino-int8` di container | jalan, `models/best_int8_openvino_model/best.xml` @ CPU |
+| `POST /predict` di container | 7 deteksi, 2 pelanggaran — **identik dengan hasil di host** |
+| Latency di container (CPU, INT8) | median **125 ms** end-to-end termasuk HTTP |
+| `docker compose up -d` | `ppe-api` healthy (healthcheck lulus) + `ppe-ui` jalan |
+| Smoke test browser terhadap container | lulus penuh (lihat bagian Testing) |
+
+> **Ukuran image: 4,22 GB.** Jalan, tapi gemuk. `site-packages` saja 2,4 GB, dan
+> sebagian besar tidak dipakai API:
+>
+> | Paket | Ukuran | Dibutuhkan API? |
+> |---|---|---|
+> | `torch` + `sympy` | 834 MB | ya (inference) |
+> | `openvino` | 176 MB | ya (backend INT8) |
+> | `_polars_runtime_32` + `pyarrow` | 359 MB | tidak — ditarik Streamlit |
+> | `scipy` + `sklearn` + `pandas` + `matplotlib` | 305 MB | sebagian besar dari `nncf` (export-only) |
+> | `onnx` | 85 MB | tidak — hanya untuk *membuat* IR |
+> | `cv2` + `opencv_python_headless.libs` | 232 MB | terpasang **dua kali**: `roboflow` menarik varian headless sementara `requirements.txt` memasang varian GUI |
+>
+> Kalau ukuran jadi masalah (build lambat di HF Spaces free tier), bikin
+> `requirements-deploy.txt` tanpa `streamlit`, `nncf`, `onnx`, dan `roboflow`,
+> lalu pakai `opencv-python-headless`. Backend `roboflow` tetap jalan — 
+> `src/remote.py` memakai `requests` langsung, bukan SDK-nya. Yang hilang cuma
+> service `ui` di compose dan `scripts/export_openvino.py`, yang keduanya
+> memang tidak dipakai di container deploy.
 
 ---
 
@@ -739,7 +772,9 @@ Hasil terakhir di mesin dev: **7 objek, 2 pelanggaran, 3.301 px merah,
 | Deteksi di mode webcam terasa tertinggal dari gambar | Turunkan **Batas FPS kirim**, atau pindah ke `INFERENCE_BACKEND=openvino-int8`. Loop sudah membatasi satu request in-flight, jadi ini murni soal server lebih lambat dari laju frame. |
 | Mode video jauh lebih sedikit deteksinya dari mode gambar | Wajar. Frame video dikecilkan ke lebar 640 px dan di-encode JPEG q=0.8 sebelum dikirim, sementara mode gambar mengirim file asli. Deteksi berconfidence rendah paling dulu hilang. |
 | `run_selftest.py`: "Chrome tidak ditemukan" | Beri path eksplisit: `python tests/browser/run_selftest.py --chrome "C:\Program Files\Google\Chrome\Application\chrome.exe"`. |
-| Docker build menarik ±2,5 GB untuk torch | Langkah `pip install --index-url .../whl/cpu torch` terlewat atau versinya tidak cocok dengan pin di `requirements.txt`. Keduanya harus sama persis. |
+| Docker build menarik ±2,5 GB untuk torch | Langkah `pip install --index-url .../whl/cpu torch` terlewat atau versinya tidak cocok dengan pin di `requirements.txt`. Keduanya harus sama persis. Cek dengan `docker run --rm ppe-detection python -c "import torch; print(torch.version.cuda)"` — harus `None`. |
+| Log container penuh `is not writable` / `No writable cache directories` | Container jalan sebagai UID yang tidak punya home writable. Dockerfile sudah membuat `appuser` UID 1000 dengan `HOME`, `XDG_CACHE_HOME`, `MPLCONFIGDIR`, `YOLO_CONFIG_DIR`; kalau kamu override `--user` ke UID lain, sediakan home yang writable untuk UID itu. |
+| `docker exec ... ls /app/models` malah mencari path Windows | Git Bash/MSYS menerjemahkan `/app/...` jadi path Windows. Jalankan dengan `MSYS_NO_PATHCONV=1` di depannya, atau pakai PowerShell. |
 
 ---
 
