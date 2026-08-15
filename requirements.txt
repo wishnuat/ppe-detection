@@ -1,27 +1,59 @@
-ultralytics>=8.2.0
+# Versi di bawah ini adalah yang benar-benar dipakai saat 51 test hijau,
+# benchmark di docs/BENCHMARK.md dijalankan, dan endpoint /predict diuji.
+# Lingkungan referensi: Windows 11 · Python 3.11.5 · CPU Intel (12th gen, iGPU).
+#
+# Pin ketat (==) supaya hasil orang lain sama persis dengan yang terdokumentasi.
+# Kalau butuh lebih longgar (mis. Python 3.12+ yang belum punya wheel untuk
+# salah satu versi ini), ganti `==` jadi `>=` per baris — bukan sekaligus —
+# lalu jalankan `pytest tests -q` untuk memastikan tidak ada yang pecah.
 
+# ---------------------------------------------------------------- inti model
+ultralytics==8.4.117
+
+# torch/torchvision ditarik otomatis oleh ultralytics, tapi di-pin eksplisit
+# karena versinya menentukan angka di docs/BENCHMARK.md.
+#
+# PENTING untuk Linux/Docker: index PyPI default memberi wheel CUDA (~2.5 GB).
+# Proyek ini hanya perlu CPU (OpenVINO yang menangani akselerasi). Install
+# varian CPU lebih dulu supaya image tetap ramping:
+#   pip install --index-url https://download.pytorch.org/whl/cpu \
+#       torch==2.13.0 torchvision==0.28.0
+# Di Windows/macOS wheel default sudah CPU-only, jadi tidak perlu langkah ini.
+torch==2.13.0
+torchvision==0.28.0
+
+# ---------------------------------------------------------------- vision I/O
 # PENTING: `roboflow` menarik opencv-python-headless, yang menimpa
-# opencv-python sehingga cv2.imshow() mati (mode webcam tidak jalan).
+# opencv-python sehingga cv2.imshow() mati (mode webcam CLI tidak jalan).
 # Install opencv-python SETELAH roboflow, atau jalankan:
 #   pip uninstall -y opencv-python-headless opencv-python
 #   pip install opencv-python==4.10.0.84
-opencv-python>=4.9.0
-fastapi>=0.111.0
-uvicorn[standard]>=0.30.0
-python-multipart>=0.0.9
-# >=1.38: UI memakai st.audio(autoplay=True) untuk bunyi alarm.
-streamlit>=1.38.0
-python-dotenv>=1.0.1
-roboflow>=1.1.30
-numpy>=1.26.0
-Pillow>=10.3.0
-requests>=2.32.0
+opencv-python==4.10.0.84
+numpy==2.3.5
+Pillow==12.3.0
 
+# ---------------------------------------------------------------- API & UI
+fastapi==0.141.1
+uvicorn[standard]==0.52.1
+# Wajib untuk multipart upload di POST /predict — tanpa ini FastAPI menolak
+# request dengan error 'python-multipart harus terinstall'.
+python-multipart==0.0.32
+# >=1.38: UI memakai st.audio(autoplay=True) untuk bunyi alarm.
+streamlit==1.61.1
+
+# ---------------------------------------------------------------- utilitas
+python-dotenv==1.2.2
+requests==2.34.2
+# Backend `roboflow` (src/remote.py) — opsional, hanya untuk baseline online.
+roboflow==1.4.0
+
+# ---------------------------------------------------------------- OpenVINO
 # Runtime backend OpenVINO (src/openvino_detector.py). Cukup untuk *menjalankan*
 # IR yang sudah di-export; tanpa ini backend `openvino` / `openvino-int8` mati.
-openvino>=2024.0.0
+openvino==2026.3.0
 # Dibutuhkan hanya saat *membuat* IR INT8 (scripts/export_openvino.py) —
-# NNCF yang melakukan post-training quantization. Tidak dipakai saat inference.
-nncf>=2.9.0
+# NNCF yang melakukan post-training quantization. Tidak dipakai saat inference,
+# jadi aman dihapus di image deploy kalau mau menghemat ~100 MB.
+nncf==3.3.0
 # Export OpenVINO lewat Ultralytics melewati ONNX sebagai format perantara.
-onnx>=1.16.0
+onnx==1.22.0

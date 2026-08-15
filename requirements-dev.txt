@@ -1,4 +1,4 @@
 -r requirements.txt
 
-# Testing
-pytest>=8.2.0
+# Testing — versi yang dipakai saat 51 test hijau.
+pytest==9.1.1

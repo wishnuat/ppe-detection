@@ -1,0 +1,693 @@
+<!doctype html>
+<!--
+  PPE Detection — frontend demo satu file, vanilla JS, tanpa dependency eksternal.
+
+  Semua inference terjadi di server (FastAPI `app/api.py`). Halaman ini cuma
+  mengirim frame dan menggambar hasilnya. Tiga mode input berbagi satu jalur
+  render yang sama (`drawResult`), jadi tampilan gambar / video / webcam konsisten.
+
+  Bounding box digambar di client dari koordinat bbox (`annotate=false`), bukan
+  memakai PNG teranotasi dari server: di mode realtime, encode + transfer PNG
+  tiap frame jauh lebih mahal daripada inference-nya sendiri.
+-->
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PPE Detection — Demo</title>
+<style>
+  :root {
+    --bg: #0f1216;
+    --panel: #171b22;
+    --panel-2: #1e232c;
+    --line: #2a313c;
+    --fg: #e6eaf0;
+    --muted: #94a1b2;
+    --accent: #4a9eff;
+    --ok: #22c55e;
+    --bad: #ef4444;
+    --idle: #4b5563;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  header h1 { font-size: 17px; margin: 0; font-weight: 650; }
+  .badge {
+    font-size: 12px; padding: 3px 9px; border-radius: 999px;
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--muted);
+  }
+  .badge.live { color: var(--ok); border-color: #14532d; }
+  .badge.down { color: var(--bad); border-color: #7f1d1d; }
+  .spacer { flex: 1; }
+
+  .layout { display: grid; grid-template-columns: 300px 1fr 260px; gap: 16px; padding: 16px; }
+  @media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px; margin-bottom: 14px;
+  }
+  .card h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--muted); margin: 0 0 11px; font-weight: 600;
+  }
+
+  .tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+  .tabs button {
+    flex: 1; padding: 8px; border-radius: 7px; cursor: pointer;
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); font: inherit;
+  }
+  .tabs button.active { background: var(--accent); border-color: var(--accent); color: #06121f; font-weight: 600; }
+
+  button.action {
+    width: 100%; padding: 9px; border-radius: 7px; cursor: pointer; font: inherit; font-weight: 600;
+    background: var(--accent); border: 1px solid var(--accent); color: #06121f; margin-top: 8px;
+  }
+  button.action.stop { background: var(--bad); border-color: var(--bad); color: #fff; }
+  button.action:disabled { opacity: .45; cursor: not-allowed; }
+
+  input[type=file] { width: 100%; font-size: 12px; color: var(--muted); }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  input[type=text] {
+    width: 100%; padding: 6px 8px; border-radius: 6px; font: inherit;
+    background: var(--bg); border: 1px solid var(--line); color: var(--fg);
+  }
+  label.row { display: flex; align-items: center; gap: 8px; padding: 3px 0; cursor: pointer; font-size: 13px; }
+  .hint { font-size: 11.5px; color: var(--muted); margin-top: 6px; line-height: 1.45; }
+
+  .stage {
+    position: relative; background: #000; border-radius: 10px;
+    border: 1px solid var(--line); overflow: hidden;
+    min-height: 340px; display: flex; align-items: center; justify-content: center;
+  }
+  .stage canvas { max-width: 100%; max-height: 74vh; display: block; }
+  .stage .placeholder { color: var(--muted); padding: 40px; text-align: center; font-size: 13px; }
+  /* Elemen sumber tidak pernah tampil — semuanya dilukis ulang ke <canvas>. */
+  #video, #webcam, #srcImg { display: none; }
+
+  .stats { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .stat {
+    flex: 1; min-width: 88px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 9px 11px;
+  }
+  .stat .k { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  .stat .v { font-size: 19px; font-weight: 650; font-variant-numeric: tabular-nums; }
+
+  .comp { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; font-size: 13px; }
+  .comp + .comp { border-top: 1px solid var(--line); }
+  .pill { font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: 999px; letter-spacing: .03em; }
+  .pill.ok   { background: rgba(34,197,94,.16);  color: var(--ok); }
+  .pill.bad  { background: rgba(239,68,68,.16);  color: var(--bad); }
+  .pill.idle { background: rgba(148,163,184,.13); color: var(--muted); }
+
+  #log { max-height: 230px; overflow-y: auto; font-size: 12px; }
+  #log div { padding: 4px 0; border-bottom: 1px solid var(--line); color: var(--muted); }
+  #log b { color: var(--bad); }
+  #log .t { font-variant-numeric: tabular-nums; }
+
+  .progress { height: 3px; background: var(--panel-2); border-radius: 2px; overflow: hidden; margin-top: 10px; }
+  .progress > div { height: 100%; width: 0; background: var(--accent); transition: width .12s linear; }
+  .err { color: var(--bad); font-size: 12.5px; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🦺 PPE Detection</h1>
+  <span class="badge" id="statusBadge">menghubungi API…</span>
+  <span class="badge" id="modelBadge" hidden></span>
+  <div class="spacer"></div>
+  <a class="badge" id="docsLink" href="/docs" target="_blank" rel="noopener">API docs ↗</a>
+</header>
+
+<div class="layout">
+
+  <!-- ============ KIRI: input & kontrol ============ -->
+  <div>
+    <div class="card">
+      <h2>Mode input</h2>
+      <div class="tabs">
+        <button data-mode="image"  class="active">Gambar</button>
+        <button data-mode="video">Video</button>
+        <button data-mode="webcam">Webcam</button>
+      </div>
+
+      <div id="panel-image">
+        <input type="file" id="fileImage" accept="image/*">
+        <div class="hint">Pilih satu gambar — deteksi langsung jalan.</div>
+      </div>
+
+      <div id="panel-video" hidden>
+        <input type="file" id="fileVideo" accept="video/*">
+        <button class="action" id="btnVideo" disabled>▶ Mulai</button>
+        <div class="progress"><div id="videoProgress"></div></div>
+        <div class="hint">Video diputar di browser; frame diambil berkala lalu
+          dikirim ke API. Frame yang datang saat request sebelumnya belum
+          selesai akan dilewati, jadi playback tidak menumpuk antrean.</div>
+      </div>
+
+      <div id="panel-webcam" hidden>
+        <button class="action" id="btnWebcam">● Nyalakan kamera</button>
+        <label class="row" style="margin-top:8px">
+          <input type="checkbox" id="mirror" checked> Cermin (mirror)
+        </label>
+        <div class="hint">Butuh izin kamera. Browser hanya mengizinkan
+          <code>getUserMedia</code> di <code>localhost</code> atau HTTPS.</div>
+      </div>
+
+      <div class="err" id="inputError" hidden></div>
+    </div>
+
+    <div class="card">
+      <h2>Sensitivitas</h2>
+      <label class="row" style="justify-content:space-between">
+        <span>Confidence</span><b id="confVal">0.35</b>
+      </label>
+      <input type="range" id="conf" min="0.05" max="0.95" step="0.05" value="0.35">
+      <div class="hint" id="confHint"></div>
+
+      <label class="row" style="justify-content:space-between; margin-top:12px">
+        <span>Batas FPS kirim</span><b id="fpsCapVal">6</b>
+      </label>
+      <input type="range" id="fpsCap" min="1" max="15" step="1" value="6">
+      <div class="hint">Berapa frame per detik yang dikirim ke API saat mode
+        video / webcam. Turunkan kalau server terasa berat.</div>
+    </div>
+
+    <div class="card">
+      <h2>Kategori ditampilkan</h2>
+      <div id="categories"></div>
+    </div>
+
+    <div class="card">
+      <h2>Koneksi API</h2>
+      <input type="text" id="apiUrl" spellcheck="false">
+      <button class="action" id="btnReconnect">Sambungkan ulang</button>
+    </div>
+  </div>
+
+  <!-- ============ TENGAH: canvas ============ -->
+  <div>
+    <div class="stage">
+      <div class="placeholder" id="placeholder">
+        Pilih gambar, video, atau nyalakan webcam untuk mulai mendeteksi.
+      </div>
+      <canvas id="canvas" hidden></canvas>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><div class="k">Latency</div><div class="v" id="statLatency">—</div></div>
+      <div class="stat"><div class="k">FPS</div><div class="v" id="statFps">—</div></div>
+      <div class="stat"><div class="k">Objek</div><div class="v" id="statObjects">—</div></div>
+      <div class="stat"><div class="k">Pelanggaran</div><div class="v" id="statViolations">—</div></div>
+    </div>
+
+    <img id="srcImg" alt=""><video id="video" playsinline muted></video><video id="webcam" playsinline muted></video>
+  </div>
+
+  <!-- ============ KANAN: hasil ============ -->
+  <div>
+    <div class="card">
+      <h2>Status kepatuhan</h2>
+      <div id="compliance"><div class="hint">Belum ada hasil.</div></div>
+    </div>
+    <div class="card">
+      <h2>Log pelanggaran</h2>
+      <div id="log"><div class="hint" style="border:0">Belum ada pelanggaran.</div></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------- konstanta
+const CATEGORY_LABELS = {
+  helmet: "Helm", glasses: "Kacamata", mask: "Masker", glove: "Sarung tangan",
+  shoes: "Sepatu", vest: "Rompi", ear_protection: "Pelindung telinga",
+  harness: "Harness", person: "Orang",
+};
+const COLOR_OK = "#22c55e";
+const COLOR_BAD = "#ef4444";
+
+// Frame webcam/video dikecilkan sebelum dikirim. Model dilatih di 416px, jadi
+// mengirim 1080p cuma menambah waktu upload + resize di server tanpa menambah
+// akurasi. Koordinat bbox yang kembali relatif terhadap ukuran yang dikirim —
+// `drawResult` menskalakannya lewat result.width/height, jadi aman.
+//
+// Hanya berlaku untuk video & webcam. Mode gambar mengirim file aslinya apa
+// adanya: re-encode JPEG di sana tidak menghemat apa pun yang berarti, tapi
+// sempat membuang deteksi berconfidence rendah (`hand_glove` 0.38 hilang di
+// quality 0.7), sehingga hasil UI tidak lagi sama dengan hasil CLI/API untuk
+// gambar yang sama — persis hal yang paling membingungkan saat demo.
+const SEND_MAX_WIDTH = 640;
+const JPEG_QUALITY = 0.8;
+
+// -------------------------------------------------------------------- state
+const state = {
+  api: "",
+  mode: "image",
+  conf: 0.35,
+  serverFloor: 0.05,
+  fpsCap: 6,
+  enabled: new Set(Object.keys(CATEGORY_LABELS)),
+  running: false,      // loop video/webcam sedang aktif
+  inFlight: false,     // ada request /predict yang belum balik
+  stream: null,
+  lastResult: null,
+  lastSource: null,    // elemen sumber frame terakhir, untuk redraw saat filter berubah
+  loopTimer: null,
+  fpsEma: 0,
+  prevViolations: new Set(),
+};
+
+const $ = (id) => document.getElementById(id);
+const canvas = $("canvas");
+const ctx = canvas.getContext("2d");
+
+// ------------------------------------------------------------------ helpers
+function setError(msg) {
+  const el = $("inputError");
+  el.hidden = !msg;
+  el.textContent = msg || "";
+}
+
+/** Deteksi yang lolos filter confidence + kategori yang sedang ditampilkan. */
+function visibleDetections(result) {
+  if (!result) return [];
+  return result.detections.filter(
+    (d) => d.confidence >= state.conf && state.enabled.has(d.category)
+  );
+}
+
+// ------------------------------------------------------------------ koneksi
+async function connect() {
+  state.api = $("apiUrl").value.replace(/\/+$/, "");
+  const badge = $("statusBadge");
+  badge.className = "badge";
+  badge.textContent = "menghubungi API…";
+  try {
+    const res = await fetch(`${state.api}/health`);
+    const info = await res.json();
+    if (info.status !== "ok") throw new Error(info.error || "API tidak siap");
+
+    badge.className = "badge live";
+    badge.textContent = `● ${info.backend} @ ${info.device}`;
+    $("modelBadge").hidden = false;
+    $("modelBadge").textContent = `${info.model_path} · ${info.num_classes} kelas`;
+    $("docsLink").href = `${state.api}/docs`;
+
+    // Server sudah membuang deteksi di bawah ambangnya sendiri, jadi slider
+    // client tidak boleh turun lebih rendah dari itu — angkanya cuma akan
+    // berbohong (tidak akan memunculkan deteksi baru).
+    state.serverFloor = info.conf_threshold ?? 0.05;
+    const slider = $("conf");
+    slider.min = state.serverFloor.toFixed(2);
+    if (parseFloat(slider.value) < state.serverFloor) slider.value = state.serverFloor;
+    onConfChange();
+    $("confHint").innerHTML =
+      `Server memfilter di <b>${state.serverFloor.toFixed(2)}</b>; slider ini menyaring ` +
+      `lebih ketat di sisi browser. Untuk turun lebih rendah, ubah ` +
+      `<code>CONF_THRESHOLD</code> di <code>.env</code> lalu restart API.`;
+
+    buildCategories(info.ppe_categories);
+    setError("");
+  } catch (err) {
+    badge.className = "badge down";
+    badge.textContent = "● API tidak terjangkau";
+    setError(`Gagal menghubungi ${state.api || "(origin ini)"}/health — ${err.message}. ` +
+             `Pastikan uvicorn jalan.`);
+  }
+}
+
+function buildCategories(ppeCategories) {
+  const cats = [...(ppeCategories || Object.keys(CATEGORY_LABELS))];
+  if (!cats.includes("person")) cats.push("person");
+  state.enabled = new Set(cats);
+
+  const box = $("categories");
+  box.innerHTML = "";
+  for (const cat of cats) {
+    const label = document.createElement("label");
+    label.className = "row";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = true;
+    cb.onchange = () => {
+      cb.checked ? state.enabled.add(cat) : state.enabled.delete(cat);
+      redraw();
+    };
+    label.append(cb, document.createTextNode(CATEGORY_LABELS[cat] || cat));
+    box.appendChild(label);
+  }
+}
+
+// ------------------------------------------------------------------ inferensi
+/**
+ * Kirim satu frame ke /predict. `annotate=false` — kita hanya butuh koordinat,
+ * gambar teranotasi digambar sendiri di canvas.
+ */
+async function predict(blob) {
+  const form = new FormData();
+  // Nama file asli dipertahankan kalau ada — memudahkan membaca access log
+  // uvicorn saat demo. Server hanya memeriksa content-type, bukan ekstensi.
+  form.append("file", blob, blob.name || "frame.jpg");
+  const t0 = performance.now();
+  const res = await fetch(`${state.api}/predict?annotate=false`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.detail || `HTTP ${res.status}`);
+  }
+  const result = await res.json();
+  result._latency = performance.now() - t0;
+  return result;
+}
+
+/** Ambil frame dari elemen (img/video) sebagai JPEG blob, dikecilkan seperlunya. */
+function grabBlob(source, srcW, srcH) {
+  const scale = Math.min(1, SEND_MAX_WIDTH / srcW);
+  const c = document.createElement("canvas");
+  c.width = Math.round(srcW * scale);
+  c.height = Math.round(srcH * scale);
+  c.getContext("2d").drawImage(source, 0, 0, c.width, c.height);
+  return new Promise((resolve) => c.toBlob(resolve, "image/jpeg", JPEG_QUALITY));
+}
+
+function sourceSize(source) {
+  return source.tagName === "VIDEO"
+    ? [source.videoWidth, source.videoHeight]
+    : [source.naturalWidth, source.naturalHeight];
+}
+
+/**
+ * Satu siklus penuh: ambil frame → kirim → gambar.
+ *
+ * `originalFile` diisi hanya di mode gambar — file dikirim apa adanya supaya
+ * hasilnya identik dengan `python -m src.cli image <file>`. Video & webcam
+ * tidak punya file asli, jadi frame-nya di-capture dari canvas.
+ */
+async function processFrame(source, originalFile) {
+  const [w, h] = sourceSize(source);
+  if (!w || !h) return;
+  const blob = originalFile || await grabBlob(source, w, h);
+  if (!blob) return;
+
+  const result = await predict(blob);
+  state.lastResult = result;
+  state.lastSource = source;
+  drawResult(source, result);
+  updateStats(result);
+  updateCompliance(result);
+  logViolations(result);
+}
+
+// ------------------------------------------------------------------ render
+function drawResult(source, result) {
+  const [w, h] = sourceSize(source);
+  if (!w || !h) return;
+
+  $("placeholder").hidden = true;
+  canvas.hidden = false;
+  canvas.width = w;
+  canvas.height = h;
+
+  const mirrored = state.mode === "webcam" && $("mirror").checked;
+  ctx.save();
+  if (mirrored) {
+    ctx.translate(w, 0);
+    ctx.scale(-1, 1);
+  }
+  ctx.drawImage(source, 0, 0, w, h);
+  ctx.restore();
+
+  // bbox dikirim dalam koordinat frame yang di-upload (sudah dikecilkan),
+  // jadi diskalakan balik ke ukuran asli sumber.
+  const sx = w / (result.width || w);
+  const sy = h / (result.height || h);
+  const font = Math.max(12, Math.round(w / 55));
+  ctx.font = `600 ${font}px system-ui, sans-serif`;
+  ctx.textBaseline = "top";
+  ctx.lineWidth = Math.max(2, Math.round(w / 320));
+
+  for (const d of visibleDetections(result)) {
+    let [x1, y1, x2, y2] = d.bbox;
+    x1 *= sx; y1 *= sy; x2 *= sx; y2 *= sy;
+    if (mirrored) { const l = w - x2; x2 = w - x1; x1 = l; }
+
+    const color = d.is_violation ? COLOR_BAD : COLOR_OK;
+    ctx.strokeStyle = color;
+    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+
+    const text = `${d.label} ${d.confidence.toFixed(2)}`;
+    const tw = ctx.measureText(text).width;
+    const th = font + 6;
+    // Label ditaruh di dalam box kalau mepet tepi atas frame.
+    const ty = y1 - th < 0 ? y1 : y1 - th;
+    ctx.fillStyle = color;
+    ctx.fillRect(x1, ty, tw + 10, th);
+    ctx.fillStyle = "#fff";
+    ctx.fillText(text, x1 + 5, ty + 3);
+  }
+}
+
+/** Gambar ulang hasil terakhir tanpa memanggil API — dipakai saat filter berubah. */
+function redraw() {
+  if (!state.lastResult || !state.lastSource) return;
+  drawResult(state.lastSource, state.lastResult);
+  updateStats(state.lastResult);
+  updateCompliance(state.lastResult);
+}
+
+function updateStats(result) {
+  const visible = visibleDetections(result);
+  $("statLatency").textContent = `${Math.round(result._latency)} ms`;
+  $("statObjects").textContent = visible.length;
+  $("statViolations").textContent = visible.filter((d) => d.is_violation).length;
+
+  // FPS diperhalus (EMA) supaya angkanya tidak melompat tiap frame.
+  const inst = 1000 / Math.max(result._latency, 1);
+  state.fpsEma = state.fpsEma ? 0.8 * state.fpsEma + 0.2 * inst : inst;
+  $("statFps").textContent = state.fpsEma.toFixed(1);
+}
+
+/**
+ * Compliance dihitung ulang di client, bukan memakai `result.compliance` apa
+ * adanya — kalau tidak, kartu status akan menampilkan kategori yang sudah
+ * di-uncheck user atau deteksi di bawah ambang slider.
+ */
+function updateCompliance(result) {
+  const visible = visibleDetections(result);
+  const violated = new Set(visible.filter((d) => d.is_violation).map((d) => d.category));
+  const present = new Set(visible.filter((d) => !d.is_violation).map((d) => d.category));
+
+  const box = $("compliance");
+  box.innerHTML = "";
+  const cats = Object.keys(result.compliance || {}).filter((c) => state.enabled.has(c));
+  if (!cats.length) {
+    box.innerHTML = '<div class="hint">Tidak ada kategori aktif.</div>';
+    return;
+  }
+  for (const cat of cats) {
+    let cls = "idle", text = "TIDAK TERDETEKSI";
+    if (violated.has(cat)) { cls = "bad"; text = "PELANGGARAN"; }
+    else if (present.has(cat)) { cls = "ok"; text = "TERDETEKSI"; }
+
+    const row = document.createElement("div");
+    row.className = "comp";
+    row.innerHTML = `<span>${CATEGORY_LABELS[cat] || cat}</span>` +
+                    `<span class="pill ${cls}">${text}</span>`;
+    box.appendChild(row);
+  }
+}
+
+/**
+ * Catat hanya saat status berubah dari patuh → melanggar. Kalau tiap frame
+ * pelanggaran dicatat, log 6 fps akan penuh dalam hitungan detik dan tidak
+ * ada yang membacanya (logika yang sama dipakai `src/alerts.py` di sisi Python).
+ */
+function logViolations(result) {
+  const now = new Set(
+    visibleDetections(result).filter((d) => d.is_violation).map((d) => d.category)
+  );
+  const fresh = [...now].filter((c) => !state.prevViolations.has(c));
+  state.prevViolations = now;
+  if (!fresh.length) return;
+
+  const log = $("log");
+  if (log.querySelector(".hint")) log.innerHTML = "";
+  const clock = new Date().toLocaleTimeString("id-ID");
+  for (const cat of fresh) {
+    const row = document.createElement("div");
+    row.innerHTML = `<span class="t">${clock}</span> — <b>${CATEGORY_LABELS[cat] || cat}</b>`;
+    log.prepend(row);
+  }
+  while (log.children.length > 100) log.lastChild.remove();
+}
+
+// ------------------------------------------------------------------ mode: gambar
+$("fileImage").onchange = async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  stopLoop();
+  setError("");
+  const img = $("srcImg");
+  img.src = URL.createObjectURL(file);
+  try {
+    await img.decode();
+    state.fpsEma = 0;
+    state.prevViolations = new Set();
+    await processFrame(img, file);
+  } catch (err) {
+    setError(`Gagal memproses gambar: ${err.message}`);
+  }
+};
+
+// ------------------------------------------------------------------ mode: video
+$("fileVideo").onchange = (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  stopLoop();
+  setError("");
+  const v = $("video");
+  v.src = URL.createObjectURL(file);
+  v.onloadedmetadata = () => { $("btnVideo").disabled = false; };
+};
+
+$("btnVideo").onclick = () => {
+  const v = $("video");
+  if (state.running) { stopLoop(); v.pause(); return; }
+  v.currentTime = 0;
+  v.play();
+  v.onended = () => stopLoop();
+  startLoop(v, () => {
+    $("videoProgress").style.width =
+      `${((v.currentTime / (v.duration || 1)) * 100).toFixed(1)}%`;
+  });
+};
+
+// ------------------------------------------------------------------ mode: webcam
+$("btnWebcam").onclick = async () => {
+  if (state.running) { stopWebcam(); return; }
+  setError("");
+  try {
+    state.stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false,
+    });
+  } catch (err) {
+    setError(`Tidak bisa mengakses kamera: ${err.message}. ` +
+             `getUserMedia hanya jalan di localhost atau HTTPS.`);
+    return;
+  }
+  const cam = $("webcam");
+  cam.srcObject = state.stream;
+  await cam.play();
+  startLoop(cam);
+};
+
+function stopWebcam() {
+  stopLoop();
+  if (state.stream) {
+    state.stream.getTracks().forEach((t) => t.stop());
+    state.stream = null;
+  }
+  $("webcam").srcObject = null;
+}
+
+$("mirror").onchange = redraw;
+
+// ------------------------------------------------------------------ loop
+/**
+ * Loop pengiriman frame. Dipakai video dan webcam.
+ *
+ * Satu request in-flight pada satu waktu: kalau timer berbunyi sementara
+ * request sebelumnya belum balik, tick itu dilewati. Tanpa penjaga ini,
+ * server yang lebih lambat dari `fpsCap` akan menumpuk antrean request dan
+ * overlay makin tertinggal dari gambar yang sedang tampil.
+ */
+function startLoop(source, onTick) {
+  state.running = true;
+  state.fpsEma = 0;
+  state.prevViolations = new Set();
+  updateButtons();
+
+  const tick = async () => {
+    if (!state.running) return;
+    if (onTick) onTick();
+    if (!state.inFlight) {
+      state.inFlight = true;
+      try {
+        await processFrame(source);
+        setError("");
+      } catch (err) {
+        setError(`Deteksi gagal: ${err.message}`);
+      } finally {
+        state.inFlight = false;
+      }
+    }
+    state.loopTimer = setTimeout(tick, 1000 / state.fpsCap);
+  };
+  tick();
+}
+
+function stopLoop() {
+  state.running = false;
+  clearTimeout(state.loopTimer);
+  state.loopTimer = null;
+  $("videoProgress").style.width = "0%";
+  updateButtons();
+}
+
+function updateButtons() {
+  $("btnWebcam").textContent = state.running ? "■ Matikan kamera" : "● Nyalakan kamera";
+  $("btnWebcam").classList.toggle("stop", state.running && state.mode === "webcam");
+  $("btnVideo").textContent = state.running ? "■ Berhenti" : "▶ Mulai";
+  $("btnVideo").classList.toggle("stop", state.running && state.mode === "video");
+}
+
+// ------------------------------------------------------------------ kontrol UI
+function onConfChange() {
+  state.conf = parseFloat($("conf").value);
+  $("confVal").textContent = state.conf.toFixed(2);
+  redraw();
+}
+$("conf").oninput = onConfChange;
+
+$("fpsCap").oninput = () => {
+  state.fpsCap = parseInt($("fpsCap").value, 10);
+  $("fpsCapVal").textContent = state.fpsCap;
+};
+
+for (const btn of document.querySelectorAll(".tabs button")) {
+  btn.onclick = () => {
+    if (state.mode === "webcam") stopWebcam(); else stopLoop();
+    state.mode = btn.dataset.mode;
+    document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("active", b === btn));
+    for (const m of ["image", "video", "webcam"]) $(`panel-${m}`).hidden = m !== state.mode;
+    setError("");
+    updateButtons();
+  };
+}
+
+$("btnReconnect").onclick = connect;
+
+// ------------------------------------------------------------------ start
+// Halaman ini biasanya di-serve oleh FastAPI sendiri, jadi origin yang sama
+// sudah benar. Kalau dibuka langsung sebagai file://, tebak localhost:8000.
+$("apiUrl").value = location.protocol === "file:" ? "http://localhost:8000" : location.origin;
+connect();
+</script>
+</body>
+</html>

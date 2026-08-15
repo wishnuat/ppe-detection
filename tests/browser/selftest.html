@@ -1,0 +1,134 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>selftest</title>
+<body>
+<pre id="out">RUNNING</pre>
+<iframe id="fr" src="/index.html" width="1400" height="900"></iframe>
+<script>
+const log = [];
+const say = (s) => { log.push(s); document.getElementById("out").textContent = log.join("\n"); };
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Polling memakai fetch nyata, bukan setTimeout: Chrome --virtual-time-budget
+// mempercepat timer sampai instan tapi MENGHENTIKAN jam virtual selama masih
+// ada request jaringan tertunda. Dengan sleep(), 100 iterasi habis dalam satu
+// kedipan dan tes gagal palsu sebelum /predict sempat dijawab.
+async function waitFor(fn, label, tries = 150) {
+  for (let i = 0; i < tries; i++) {
+    try { if (fn()) return true; } catch (e) { /* iframe belum siap */ }
+    await fetch("/health").catch(() => {});
+  }
+  throw new Error(`timeout menunggu: ${label}`);
+}
+
+(async () => {
+  try {
+    const fr = document.getElementById("fr");
+    await new Promise(r => fr.onload = r);
+    const w = fr.contentWindow, d = fr.contentDocument;
+
+    // tangkap error runtime apa pun di dalam iframe
+    const errors = [];
+    w.addEventListener("error", e => errors.push(`${e.message} @ ${e.lineno}`));
+    w.addEventListener("unhandledrejection", e => errors.push(`unhandled: ${e.reason}`));
+
+    await waitFor(() => d.getElementById("statusBadge").classList.contains("live"), "koneksi API");
+    say("OK  connect(): " + d.getElementById("statusBadge").textContent);
+    say("OK  model     : " + d.getElementById("modelBadge").textContent);
+
+    // --- suntik gambar sample ke input file, persis seperti user memilih file ---
+    const blob = await (await fetch("/_selftest_sample.jpg")).blob();
+    const file = new File([blob], "sample.jpg", { type: "image/jpeg" });
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    const input = d.getElementById("fileImage");
+    input.files = dt.files;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    say("OK  file dimasukkan ke #fileImage (" + blob.size + " byte)");
+
+    await waitFor(() => d.getElementById("statObjects").textContent !== "—", "hasil deteksi");
+
+    const objects = d.getElementById("statObjects").textContent;
+    const viol = d.getElementById("statViolations").textContent;
+    const lat = d.getElementById("statLatency").textContent;
+    const fps = d.getElementById("statFps").textContent;
+    say(`OK  deteksi   : ${objects} objek, ${viol} pelanggaran, ${lat}, ${fps} fps`);
+
+    // --- canvas benar-benar terlukis? ---
+    const cv = d.getElementById("canvas");
+    if (cv.hidden) throw new Error("canvas masih hidden");
+    if (!d.getElementById("placeholder").hidden) throw new Error("placeholder belum disembunyikan");
+    say(`OK  canvas    : ${cv.width}x${cv.height}, terlihat`);
+
+    const px = cv.getContext("2d").getImageData(0, 0, cv.width, cv.height).data;
+    let nonBlack = 0, red = 0, green = 0;
+    for (let i = 0; i < px.length; i += 4) {
+      const [r, g, b] = [px[i], px[i + 1], px[i + 2]];
+      if (r + g + b > 30) nonBlack++;
+      // warna box: #ef4444 (pelanggaran) & #22c55e (patuh)
+      if (Math.abs(r - 239) < 12 && Math.abs(g - 68) < 12 && Math.abs(b - 68) < 12) red++;
+      if (Math.abs(r - 34) < 12 && Math.abs(g - 197) < 12 && Math.abs(b - 94) < 12) green++;
+    }
+    if (nonBlack < px.length / 4 * 0.5) throw new Error("canvas sebagian besar kosong");
+    say(`OK  piksel    : gambar terlukis, ${red} px merah (pelanggaran), ${green} px hijau (patuh)`);
+    if (red === 0) throw new Error("tidak ada box pelanggaran tergambar padahal ada pelanggaran");
+    if (green === 0) throw new Error("tidak ada box patuh tergambar");
+
+    // --- panel compliance ---
+    const pills = [...d.querySelectorAll("#compliance .comp")].map(
+      e => e.children[0].textContent + "=" + e.children[1].textContent);
+    say("OK  compliance: " + pills.join(", "));
+    if (!pills.some(p => p.includes("PELANGGARAN"))) throw new Error("tidak ada pill PELANGGARAN");
+
+    // --- log pelanggaran ---
+    const logRows = d.querySelectorAll("#log div:not(.hint)").length;
+    say(`OK  log       : ${logRows} baris pelanggaran tercatat`);
+    if (logRows === 0) throw new Error("log pelanggaran kosong");
+
+    // --- slider confidence menyaring ulang tanpa panggil API ---
+    const before = parseInt(d.getElementById("statObjects").textContent, 10);
+    const slider = d.getElementById("conf");
+    slider.value = "0.85";
+    slider.dispatchEvent(new Event("input", { bubbles: true }));
+    await fetch("/health").catch(() => {});
+    const after = parseInt(d.getElementById("statObjects").textContent, 10);
+    say(`OK  slider    : conf 0.35 -> 0.85 menyaring ${before} objek menjadi ${after}`);
+    if (after >= before) throw new Error("slider confidence tidak menyaring apa pun");
+
+    // --- matikan satu kategori, hasil harus berkurang ---
+    slider.value = "0.35";
+    slider.dispatchEvent(new Event("input", { bubbles: true }));
+    await fetch("/health").catch(() => {});
+    const boxes = d.querySelectorAll("#categories input[type=checkbox]");
+    const full = parseInt(d.getElementById("statObjects").textContent, 10);
+    boxes[0].checked = false;                     // Helm
+    boxes[0].dispatchEvent(new Event("change", { bubbles: true }));
+    await fetch("/health").catch(() => {});
+    const filtered = parseInt(d.getElementById("statObjects").textContent, 10);
+    say(`OK  kategori  : matikan "Helm" -> ${full} objek menjadi ${filtered}`);
+    if (filtered >= full) throw new Error("filter kategori tidak berpengaruh");
+
+    // --- pindah tab tidak melempar error ---
+    for (const mode of ["video", "webcam", "image"]) {
+      d.querySelector(`.tabs button[data-mode="${mode}"]`).click();
+      await fetch("/health").catch(() => {});
+      if (!d.getElementById(`panel-${mode}`).checkVisibility())
+        throw new Error(`panel-${mode} tidak tampil setelah tab diklik`);
+    }
+    say("OK  tab       : ganti mode video/webcam/gambar mulus");
+
+    if (errors.length) throw new Error("error runtime di halaman: " + errors.join(" | "));
+    say("OK  runtime   : tidak ada error / unhandled rejection");
+    say("\n=== SELFTEST LULUS ===");
+  } catch (err) {
+    // Pesan error di dalam iframe tidak ikut ter-dump, jadi disalin ke sini.
+    let inner = "";
+    try {
+      const e = document.getElementById("fr").contentDocument.getElementById("inputError");
+      if (e && !e.hidden) inner = " | pesan di UI: " + e.textContent;
+    } catch (_) {}
+    say("\n!!! GAGAL: " + err.message + inner);
+  }
+})();
+</script>
+</body>

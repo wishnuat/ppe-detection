@@ -2,12 +2,29 @@
 
 Sistem deteksi Alat Pelindung Diri (APD/PPE) berbasis **YOLOv8** dengan
 pipeline lengkap: inference lokal (image / video / webcam), REST API via
-**FastAPI**, dan demo UI via **Streamlit**. Siap dijalankan lewat Docker.
+**FastAPI**, frontend web satu file, dan demo UI via **Streamlit**. Siap
+dijalankan lewat Docker.
 
 Dibangun sebagai **tugas akhir sertifikasi AI Super Class — track Computer
 Vision**, melanjutkan proyek PPE Detection sebelumnya yang berbasis Roboflow
 Serverless Inference API menjadi solusi yang **offline-capable** dan siap
 diintegrasikan ke perangkat edge (CCTV / dashcam armada).
+
+## ⚡ Mulai cepat
+
+```bash
+git clone <repo> && cd "PPE Detection"
+python -m venv venv && venv\Scripts\activate     # Linux/Mac: source venv/bin/activate
+pip install -r requirements.txt
+
+# Taruh weights di models/best.pt (tidak ikut di-commit — lihat Setup langkah 3)
+
+uvicorn app.api:app --port 8000
+```
+
+Buka **http://localhost:8000** — frontend demo, Swagger di `/docs`.
+
+![Frontend web PPE Detection](docs/screenshots/web_ui.png)
 
 ---
 
@@ -109,10 +126,24 @@ di subset. Rincian lengkap ada di `runs/ppe/ppe-yolov8n-cpu/`.
                        │  Delivery layer    │             │
                        │  ────────────────  │             │
                        │  FastAPI  (REST)   │◀────────────┘
+                       │   └─ web/ (HTML)   │
                        │  Streamlit (UI)    │
                        │  CLI      (local)  │
                        └────────────────────┘
 ```
+
+Ada **dua** frontend, sengaja berbeda peran:
+
+| | `web/index.html` | `app/streamlit_app.py` |
+|---|---|---|
+| Dipakai untuk | demo publik, embed, deploy | operator / tuning harian |
+| Inference | lewat HTTP ke `/predict` | panggil detector langsung di proses yang sama |
+| Dependency | tidak ada — satu file, vanilla JS | Streamlit |
+| Webcam | kamera **browser** (jalan dari mana saja) | kamera **mesin server** + snapshot browser |
+| Kelebihan | ringan, bisa di-deploy satu container, tidak butuh Python di sisi klien | kontrol jauh lebih dalam: ambang per kategori, kebijakan alarm, profil, rekam sesi |
+
+Keduanya berbagi taksonomi & logika compliance yang sama di `src/detector.py`,
+jadi hasil deteksinya identik untuk gambar yang sama.
 
 **Modul utama:**
 
@@ -126,8 +157,17 @@ PPE Detection/
 │   ├── alerts.py         # AlertEngine (debounce, cooldown) + SessionStats + CSV
 │   └── cli.py            # CLI: python -m src.cli image|video|webcam
 ├── app/
-│   ├── api.py            # FastAPI: /health, /predict, /predict/image
+│   ├── api.py            # FastAPI: /health, /predict, /predict/image + serve web/
 │   └── streamlit_app.py  # Streamlit UI: sensitivitas, alert, log, rekam sesi
+├── web/
+│   └── index.html        # Frontend demo: satu file, vanilla JS, tanpa dependency
+├── tests/
+│   ├── test_detector.py  # taksonomi label & logika compliance
+│   ├── test_alerts.py    # debounce, cooldown, gating alarm
+│   ├── test_backends.py  # pemilihan backend + letterbox/NMS OpenVINO
+│   └── browser/
+│       ├── selftest.html    # skenario uji yang dijalankan di dalam browser
+│       └── run_selftest.py  # runner Chrome headless untuk web/index.html
 ├── scripts/
 │   ├── download_dataset.py # Download dataset YOLOv8 dari Roboflow
 │   ├── train.py            # Training lokal -> models/best.pt
@@ -136,11 +176,18 @@ PPE Detection/
 │   └── evaluate.py         # Ukur mAP tiap varian model  -> docs/METRICS.md
 ├── datasets/             # (dataset hasil export, tidak di-commit)
 ├── models/               # (weight .pt & IR disimpan di sini, tidak di-commit)
+├── main.py               # ⚠️ skrip awal (Roboflow serverless, model lama
+│                         #    `ppes-kaxsi/8`). Sudah digantikan src/cli.py —
+│                         #    disimpan sebagai jejak iterasi, jangan dipakai.
 ├── Dockerfile
 ├── docker-compose.yml    # Service: api (8000) + ui (8501)
 ├── requirements.txt
 └── .env.example
 ```
+
+> **Weights tidak ikut di-commit** (`*.pt` ada di `.gitignore`). Setelah clone,
+> `models/` masih kosong dan API akan menjawab 503 sampai kamu menaruh
+> `models/best.pt` — lihat [Setup langkah 3](#3-siapkan-weights-modelsbestpt).
 
 ---
 
@@ -366,8 +413,10 @@ Endpoints:
 
 | Method | Path             | Deskripsi                                                    |
 |--------|------------------|--------------------------------------------------------------|
-| GET    | `/health`        | Health check + info model (backend aktif, device, path, jumlah class, list class) |
+| GET    | `/`              | Frontend demo (`web/index.html`) |
+| GET    | `/health`        | Health check + info model (backend aktif, device, path, jumlah class, list class, ambang confidence & IoU, daftar kategori APD) |
 | POST   | `/predict`       | Multipart upload gambar → JSON `{detections, compliance, annotated_image_b64}` |
+| POST   | `/predict?annotate=false` | Sama, **tanpa** `annotated_image_b64`. Untuk mode realtime — client menggambar box sendiri dari koordinat bbox. |
 | POST   | `/predict/image` | Multipart upload gambar → langsung return PNG hasil deteksi |
 
 Dokumentasi interaktif: **http://localhost:8000/docs**
@@ -377,6 +426,14 @@ Contoh request:
 ```bash
 curl -X POST -F "file=@sample.jpg" http://localhost:8000/predict | jq .compliance
 ```
+
+**Kenapa ada `annotate=false`.** Pada gambar uji 640×640, response lengkap
+dengan PNG teranotasi berukuran **819.914 byte**; tanpa itu hanya **1.009 byte**
+— **99,9% lebih kecil**. Di mode webcam, encode PNG + transfer base64 tiap
+frame jauh lebih mahal daripada inference-nya sendiri, jadi frontend memakai
+mode ini dan menggambar bounding box di `<canvas>` dari koordinat yang
+dikembalikan. Endpoint default tetap mengirim gambar supaya `curl` satu baris
+tetap enak dipakai.
 
 Contoh response `/predict` (dipotong):
 
@@ -403,6 +460,54 @@ Contoh response `/predict` (dipotong):
 ```
 
 `label` = kelas mentah model, `category` = kategori kepatuhan hasil pemetaan.
+
+### Frontend web (satu file HTML)
+
+Tidak ada langkah build, tidak ada `npm install`. Begitu FastAPI jalan,
+frontend sudah ikut dilayani di root:
+
+```bash
+uvicorn app.api:app --port 8000
+# buka http://localhost:8000
+```
+
+![Frontend web PPE Detection](docs/screenshots/web_ui.png)
+
+Tiga mode input, semuanya menggambar bounding box sebagai overlay di `<canvas>`:
+
+| Mode | Cara kerja |
+|------|------------|
+| **Gambar** | File dikirim **apa adanya** ke `/predict`. Sengaja tidak di-resize/re-encode supaya hasilnya identik dengan `python -m src.cli image <file>` — pernah ada versi yang re-encode JPEG di browser dan diam-diam menghilangkan deteksi lemah (`hand_glove` 0.38), sehingga UI dan CLI memberi jawaban berbeda untuk gambar yang sama. |
+| **Video** | Video diputar di browser, frame diambil berkala lewat canvas lalu dikirim ke API. Ada progress bar. |
+| **Webcam** | `getUserMedia` — kamera **browser**, bukan kamera server. Artinya demo yang di-deploy ke cloud tetap bisa dipakai dari laptop/HP siapa pun. |
+
+Kontrol yang tersedia:
+
+- **Confidence** — menyaring ulang di sisi browser tanpa memanggil API lagi,
+  jadi menggeser slider terasa instan. Batas bawahnya dikunci ke ambang server
+  (`conf_threshold` dari `/health`): deteksi di bawah angka itu sudah dibuang
+  model sebelum sempat dikirim, jadi slider yang bisa turun lebih rendah cuma
+  akan berbohong. Untuk benar-benar menurunkannya, ubah `CONF_THRESHOLD` di
+  `.env` lalu restart API.
+- **Batas FPS kirim** — berapa frame per detik yang dikirim di mode video/webcam.
+- **Kategori ditampilkan** — checkbox per kategori APD; ikut memfilter bounding
+  box, kartu compliance, dan log sekaligus.
+- **Koneksi API** — kalau file HTML-nya dibuka terpisah (mis. di-host di GitHub
+  Pages), isi base URL API di sini. CORS sudah dibuka di `app/api.py`.
+
+Panel kanan menampilkan status 8 kategori kepatuhan dan **log pelanggaran**
+yang hanya mencatat saat status berubah patuh → melanggar, bukan tiap frame —
+logika peredam yang sama dengan `src/alerts.py` di sisi Python.
+
+> **Catatan webcam:** browser hanya mengizinkan `getUserMedia` di `localhost`
+> atau HTTPS. Di `http://` dengan IP LAN (mis. `http://192.168.1.5:8000`),
+> tombol kamera akan ditolak browser — ini aturan browser, bukan bug aplikasi.
+> HuggingFace Spaces sudah HTTPS, jadi di sana webcam jalan.
+
+Loop pengiriman frame menjaga **satu request in-flight** pada satu waktu: kalau
+timer berbunyi sementara `/predict` sebelumnya belum menjawab, tick itu
+dilewati. Tanpa penjaga ini, server yang lebih lambat dari batas FPS akan
+menumpuk antrean dan overlay makin tertinggal dari gambar yang tampil.
 
 ### Streamlit demo UI
 
@@ -490,6 +595,68 @@ di `.env` langsung berlaku di dalam container — tanpa rebuild image.
 
 ---
 
+## ☁️ Deploy
+
+Image-nya melayani **API dan frontend dari satu container**, jadi demo publik
+cukup satu service. Port diambil dari env `PORT` (default `8000`) supaya cocok
+dengan platform yang menentukan portnya sendiri.
+
+Tiga hal yang membedakan image deploy dari `docker compose` lokal:
+
+1. **Weights di-bake ke image** (`COPY models ./models`). HuggingFace Spaces dan
+   Railway tidak punya volume mount, jadi `models/best.pt` harus sudah ada di
+   dalam image saat build. Di lokal, `docker compose` menimpanya dengan volume
+   `./models`, jadi tidak ada duplikasi kerja.
+2. **torch versi CPU** dipasang dari index PyTorch sebelum `requirements.txt`.
+   Tanpa itu, PyPI memberi wheel CUDA ±2,5 GB yang tidak terpakai sama sekali.
+3. **`HOME`, `MPLCONFIGDIR`, `YOLO_CONFIG_DIR`** diarahkan ke lokasi writable.
+   HuggingFace menjalankan container sebagai UID 1000 tanpa home yang bisa
+   ditulis, dan `import ultralytics` gagal dengan `PermissionError` tanpa ini.
+
+### HuggingFace Spaces
+
+1. Buat Space baru → SDK **Docker** → Blank.
+2. Pastikan `models/best.pt` ada di working tree (weights di-gitignore untuk
+   GitHub; untuk Space, commit paksa dengan `git add -f models/best.pt` —
+   ukurannya ~6 MB, aman tanpa Git LFS).
+3. Tambahkan `README.md` di root Space dengan frontmatter ini (HuggingFace
+   membaca `app_port` dari sini):
+
+   ```yaml
+   ---
+   title: PPE Detection
+   emoji: 🦺
+   colorFrom: yellow
+   colorTo: red
+   sdk: docker
+   app_port: 7860
+   ---
+   ```
+
+4. Set variabel `PORT=7860` di **Settings → Variables**, lalu push.
+
+CPU Basic (2 vCPU, gratis) cukup untuk mode gambar dan webcam pelan. Untuk
+webcam yang lebih lancar, set `INFERENCE_BACKEND=openvino-int8` di Variables —
+tapi IR-nya harus ikut di-commit juga (`git add -f models/best_int8_openvino_model`).
+
+### Railway
+
+```bash
+railway init
+railway up
+```
+
+Railway mendeteksi `Dockerfile` sendiri dan menyuntikkan `PORT`, jadi tidak ada
+konfigurasi tambahan. Set `INFERENCE_BACKEND` di dashboard kalau ingin OpenVINO.
+
+> **Belum diuji end-to-end.** Docker Desktop tidak aktif di mesin ini saat
+> `Dockerfile` ditulis, jadi image-nya belum pernah benar-benar di-build.
+> Semua yang di atas berasal dari pembacaan konfigurasi, bukan dari build yang
+> berhasil — verifikasi dengan `docker build -t ppe-detection .` sebelum
+> mengandalkannya untuk demo penting.
+
+---
+
 ## 🧪 Testing
 
 ```bash
@@ -519,6 +686,35 @@ runtime OpenVINO:
    bagian yang ditulis manual karena OpenVINO tidak membawa post-processing
    YOLO seperti Ultralytics, jadi paling rawan salah.
 
+### Smoke test frontend (browser sungguhan)
+
+`pytest` tidak menyentuh `web/index.html` sama sekali. Untuk itu ada runner
+terpisah yang menjalankan Chrome headless:
+
+```bash
+uvicorn app.api:app --port 8000          # terminal 1
+python tests/browser/run_selftest.py     # terminal 2
+```
+
+Yang diperiksa — semuanya hal yang hanya bisa gagal di browser:
+
+- halaman terhubung ke `/health` dan mengisi badge backend/model,
+- file gambar yang dimasukkan ke `<input type=file>` benar-benar terkirim dan
+  menghasilkan deteksi,
+- **piksel canvas**: box merah (pelanggaran) dan hijau (patuh) benar-benar
+  tergambar — bukan sekadar "tidak ada exception",
+- slider confidence menyaring ulang tanpa memanggil API,
+- mematikan satu kategori mengurangi jumlah objek,
+- ganti tab gambar/video/webcam tidak melempar error,
+- tidak ada `error` atau `unhandledrejection` selama seluruh skenario.
+
+Runner menyalin `selftest.html` ke `web/` sementara (perlu origin yang sama
+supaya iframe ke `/index.html` tidak kena same-origin policy) dan menghapusnya
+lagi di akhir, sukses maupun gagal.
+
+Hasil terakhir di mesin dev: **7 objek, 2 pelanggaran, 3.301 px merah,
+7.748 px hijau — sama persis dengan output `/predict` untuk gambar yang sama.**
+
 ---
 
 ## 🩺 Troubleshooting
@@ -536,6 +732,14 @@ runtime OpenVINO:
 | Export INT8 gagal: "butuh dataset kalibrasi" | Quantization perlu gambar nyata untuk mengukur rentang aktivasi. Download dataset dulu, atau pakai `--no-int8`. |
 | `--device GPU` gagal / tidak terdeteksi | iGPU Intel butuh driver yang dikenali OpenVINO. Fallback ke `CPU` atau `AUTO`. |
 | `ignoring corrupt image/label: labels mix segment and detection rows` | Sebagian anotasi dataset ini berformat segmentasi (polygon), bukan bounding box. Ultralytics melewatinya; ~1% gambar hilang dan training tetap jalan. |
+| Buka `http://localhost:8000` malah dapat `{"detail":"Not Found"}` | Folder `web/` tidak ada, jadi mount static dilewati (`app/api.py` memeriksa `WEB_DIR.is_dir()`). Pastikan `web/index.html` ikut ter-clone / ter-COPY di Dockerfile. |
+| Tombol webcam ditolak: "Tidak bisa mengakses kamera" | Browser hanya mengizinkan `getUserMedia` di `localhost` atau HTTPS. Akses lewat IP LAN via `http://` selalu ditolak — pakai `localhost`, atau deploy ke platform ber-HTTPS. |
+| Frontend jalan tapi badge merah "API tidak terjangkau" | Halaman dibuka sebagai `file://` sementara API di port lain. Isi base URL yang benar di panel **Koneksi API**, atau akses lewat `http://localhost:8000` supaya satu origin. |
+| Slider confidence tidak bisa turun di bawah 0.35 | Memang dikunci ke ambang server: deteksi di bawahnya sudah dibuang model. Turunkan `CONF_THRESHOLD` di `.env`, restart API, lalu refresh halaman. |
+| Deteksi di mode webcam terasa tertinggal dari gambar | Turunkan **Batas FPS kirim**, atau pindah ke `INFERENCE_BACKEND=openvino-int8`. Loop sudah membatasi satu request in-flight, jadi ini murni soal server lebih lambat dari laju frame. |
+| Mode video jauh lebih sedikit deteksinya dari mode gambar | Wajar. Frame video dikecilkan ke lebar 640 px dan di-encode JPEG q=0.8 sebelum dikirim, sementara mode gambar mengirim file asli. Deteksi berconfidence rendah paling dulu hilang. |
+| `run_selftest.py`: "Chrome tidak ditemukan" | Beri path eksplisit: `python tests/browser/run_selftest.py --chrome "C:\Program Files\Google\Chrome\Application\chrome.exe"`. |
+| Docker build menarik ±2,5 GB untuk torch | Langkah `pip install --index-url .../whl/cpu torch` terlewat atau versinya tidak cocok dengan pin di `requirements.txt`. Keduanya harus sama persis. |
 
 ---
 
@@ -554,6 +758,12 @@ Compliance status untuk frame di atas:
   "vest": "TIDAK TERDETEKSI", "ear_protection": "TIDAK TERDETEKSI",
   "harness": "TIDAK TERDETEKSI" }
 ```
+
+Frontend web (`web/index.html`) pada gambar uji dari split test — dua
+`head_nohelmet` digambar merah, sisanya hijau, panel kanan merangkum status
+8 kategori:
+
+![Frontend web PPE Detection](docs/screenshots/web_ui.png)
 
 _Screenshot berikut menyusul — simpan di `docs/screenshots/` lalu tampilkan di sini._
 

@@ -5,12 +5,19 @@ __pycache__/
 .env
 .git/
 .gitignore
+.pytest_cache/
+.vscode/
+.claude/
 outputs/
 docs/
 runs/
 datasets/
 tests/
 *.mp4
-*.jpg
+*.avi
 frame.jpg
-models/*.pt
+# models/ SENGAJA tidak diabaikan — weights di-bake ke image supaya deploy ke
+# HuggingFace Spaces / Railway (yang tanpa volume mount) bisa jalan sendiri.
+# Yang dibuang cuma checkpoint mentah yang tidak dipakai runtime.
+models/yolov8n.pt
+models/last.pt
