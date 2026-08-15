@@ -11,6 +11,14 @@ frame.jpg
 *.onnx
 *.tflite
 
+# KECUALI weights hasil training final. Sengaja di-commit meski aturan di atas
+# melarang .pt, karena tanpa ini `git clone` menghasilkan models/ kosong dan
+# demo tidak bisa dijalankan sebelum training berjam-jam — Roboflow tidak
+# menyediakan download .pt untuk model yang dilatih di platform mereka.
+# Ukurannya 6,2 MB: jauh di bawah limit 100 MB GitHub, tidak butuh Git LFS.
+# Ini juga syarat deploy ke HuggingFace Spaces / Railway yang tanpa volume mount.
+!models/best.pt
+
 # OpenVINO IR hasil scripts/export_openvino.py (best.bin bisa belasan MB)
 models/*_openvino_model/
 
