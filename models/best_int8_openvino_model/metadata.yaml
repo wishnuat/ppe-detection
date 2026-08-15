@@ -1,0 +1,40 @@
+description: Ultralytics best model trained on C:\Users\HP\Documents\PPE Detection\datasets\_subset_2500\data.yaml
+author: Ultralytics
+date: '2026-08-12T15:56:44.105281+08:00'
+version: 8.4.117
+license: AGPL-3.0 License (https://ultralytics.com/license)
+docs: https://docs.ultralytics.com
+stride: 32
+task: detect
+head: Detect
+batch: 1
+imgsz:
+- 416
+- 416
+names:
+  0: Barefoots
+  1: Ear-protection
+  2: Harness
+  3: No_Ear-Protection
+  4: No_Glasses
+  5: Sandals
+  6: boots
+  7: face_mask
+  8: face_nomask
+  9: glasses
+  10: hand_glove
+  11: hand_noglove
+  12: head_helmet
+  13: head_nohelmet
+  14: person
+  15: shoes
+  16: vest
+args:
+  data: C:\Users\HP\Documents\PPE Detection\datasets\_subset_2500\data.yaml
+  batch: 1
+  fraction: 1.0
+  quantize: 8
+  dynamic: false
+  nms: false
+channels: 3
+end2end: false

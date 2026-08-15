@@ -22,6 +22,16 @@ frame.jpg
 # OpenVINO IR hasil scripts/export_openvino.py (best.bin bisa belasan MB)
 models/*_openvino_model/
 
+# KECUALI IR INT8 — 3,5 MB, dan inilah backend tercepat (8,55x torch CPU di
+# iGPU, 2,22x di CPU). Ikut di-commit supaya deploy ke HuggingFace Spaces /
+# Railway bisa memakai INFERENCE_BACKEND=openvino-int8 tanpa langkah export
+# manual di sisi pengguna.
+#
+# Varian FP32 (12 MB) sengaja TIDAK diikutkan: 3,4x lebih besar demi selisih
+# akurasi 0,32 pp mAP@50. Kalau butuh, regenerasi dengan
+#   python scripts/export_openvino.py --no-int8
+!models/best_int8_openvino_model/
+
 # Roboflow downloaded dataset artifacts
 datasets/
 ppes-*/
