@@ -90,6 +90,10 @@ scikit-learn==1.9.0
 # pandas: tabel di halaman Streamlit fatigue (app/fatigue_ui.py).
 pandas==3.0.5
 
+# openpyxl: menulis laporan .xlsx (src/fatigue/report.py). Hanya dipakai saat
+# meng-export laporan — aman dihapus di image deploy yang cuma memantau.
+openpyxl==3.1.5
+
 # OPSIONAL — backend face recognition alternatif (lebih akurat pada pose
 # ekstrem, tapi +330 MB bobot dan butuh build tools di Windows).
 # Aktifkan dengan EMBEDDER_BACKEND=insightface.

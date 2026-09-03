@@ -888,7 +888,9 @@ src/fatigue/
     classifier.py   CNN fatigue + preprocessing bersama (torch / OpenVINO)
     temporal.py     jendela geser: PERCLOS, kedip, menguap, microsleep, kalibrasi
     fusion.py       skor tertimbang + aturan keras + histeresis + penjelasan
-    attendance.py   SQLite: karyawan, embedding, log kehadiran
+    attendance.py   SQLite: karyawan, embedding, log kedatangan
+    records.py      riwayat fatigue: cuplikan berkala + kejadian
+    report.py       agregasi laporan + penulis Excel
     enrollment.py   validasi & pendaftaran foto — dipakai CLI, UI, dan API
     pipeline.py     orkestrasi + asosiasi track + rendering
     cli.py          CLI image/video/webcam
@@ -898,6 +900,7 @@ scripts/
     train_fatigue.py             transfer learning + EMA + tuning ambang
     evaluate_fatigue.py          metrik test set per backend + sapuan ambang
     export_fatigue.py            ONNX + OpenVINO FP32/INT8
+    export_report.py             laporan absensi & fatigue ke .xlsx
     tune_fatigue_threshold.py    pilih titik operasi classifier, tanpa training ulang
     benchmark_fatigue.py         latensi per komponen + FPS ujung-ke-ujung
     enroll_faces.py              pendaftaran wajah (folder / webcam)
@@ -913,6 +916,8 @@ tests/
     test_fatigue_face.py         penskalaan deteksi, filter ukuran, embedding
     test_fatigue_classifier.py   kesetaraan preprocessing training vs inferensi
     test_fatigue_enrollment.py   aturan penerimaan foto, dan bahwa ketiganya sama
+    test_fatigue_report.py       pencatatan riwayat & arti angka laporan
+    test_camera.py               pembukaan webcam tahan-gantung
 
 129 test, semuanya jalan tanpa GPU. Yang butuh bobot atau checkpoint akan
 di-skip, bukan gagal, kalau file-nya belum ada.

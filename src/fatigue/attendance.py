@@ -75,10 +75,20 @@ CREATE TABLE IF NOT EXISTS attendance (
 CREATE INDEX IF NOT EXISTS idx_att_employee_time ON attendance(employee_id, timestamp);
 """
 
-# Jeda minimum antara dua pencatatan untuk orang yang sama. Tanpa ini, satu
-# orang yang berdiri di depan kamera akan menghasilkan satu baris log per
-# frame — ribuan baris untuk satu kedatangan.
-DEFAULT_LOG_COOLDOWN = 300.0
+# Lama seseorang harus TIDAK TERLIHAT sebelum kemunculannya dihitung sebagai
+# kedatangan baru.
+#
+# Ini bukan cooldown biasa. Cooldown sederhana ("jangan catat lagi dalam 5
+# menit") tetap menghasilkan satu baris tiap 5 menit selama orangnya berdiri di
+# depan kamera — 24 baris untuk satu shift 2 jam, dan log absensi yang isinya
+# begitu tidak menjawab pertanyaan apa pun. Yang dicari orang dari log absensi
+# adalah "jam berapa dia datang", bukan "dia masih ada, masih ada, masih ada".
+#
+# Jadi yang diukur adalah jeda sejak terakhir kali orangnya TERLIHAT. Selama ia
+# terus terlihat, tidak ada baris baru berapa pun lamanya. Begitu ia menghilang
+# lebih dari ambang ini lalu kembali — istirahat makan, ganti shift — barulah
+# itu kedatangan baru.
+DEFAULT_REENTRY_GAP = 300.0
 
 
 @dataclass
@@ -137,13 +147,17 @@ class AttendanceBook:
         db_path: str | Path | None = None,
         backend: str = "sface",
         threshold: float = 0.40,
-        log_cooldown: float = DEFAULT_LOG_COOLDOWN,
+        reentry_gap: float = DEFAULT_REENTRY_GAP,
     ) -> None:
         self.db_path = Path(db_path or DEFAULT_DB)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.backend = backend
         self.threshold = threshold
-        self.log_cooldown = log_cooldown
+        self.reentry_gap = reentry_gap
+        # Kapan tiap orang terakhir TERLIHAT (bukan terakhir dicatat).
+        # Di memori saja: kalau prosesnya restart, kemunculan berikutnya
+        # memang wajar dihitung sebagai kedatangan baru.
+        self._last_seen: dict[str, float] = {}
 
         self._matrix: np.ndarray | None = None
         self._owners: list[str] = []
@@ -337,18 +351,32 @@ class AttendanceBook:
         camera: str = "",
         now: float | None = None,
     ) -> AttendanceRecord | None:
-        """Catat kehadiran. None kalau ditolak (tidak dikenal / masih cooldown).
+        """Catat kedatangan. None kalau tidak dikenal atau orangnya belum pergi.
 
-        Cooldown-nya per orang, bukan global: dua karyawan yang lewat
-        bersamaan harus dua-duanya tercatat.
+        Dipanggil tiap kali seseorang dikenali — kelas ini yang memutuskan
+        apakah kemunculan itu kedatangan baru. Panggilan yang tidak
+        menghasilkan baris tetap penting: ia memperbarui catatan "terakhir
+        terlihat", dan itulah yang membedakan orang yang masih di tempat dari
+        orang yang baru datang lagi.
+
+        Ambangnya per orang, bukan global: dua karyawan yang lewat bersamaan
+        harus dua-duanya tercatat.
         """
         if not identity.is_known or identity.employee_id is None:
             return None
         t = time.time() if now is None else now
 
-        last = self.last_event(identity.employee_id)
-        if last is not None and t - last.timestamp < self.log_cooldown:
+        seen_before = self._last_seen.get(identity.employee_id)
+        self._last_seen[identity.employee_id] = t
+        if seen_before is not None and t - seen_before < self.reentry_gap:
             return None
+
+        # Proses baru mulai: jangan mencatat ulang kedatangan yang barusan
+        # sudah tercatat sebelum restart.
+        if seen_before is None:
+            last = self.last_event(identity.employee_id)
+            if last is not None and t - last.timestamp < self.reentry_gap:
+                return None
 
         record = AttendanceRecord(
             employee_id=identity.employee_id, name=identity.name,

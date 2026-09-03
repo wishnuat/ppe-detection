@@ -157,7 +157,44 @@ python -m src.fatigue.cli image frame.jpg
 
 ---
 
+## 4b. Laporan Excel
+
+Data fatigue tercatat otomatis selama sesi Monitor / CLI webcam berjalan.
+Setelah ada data, export-nya:
+
+```powershell
+cd "C:\Users\HP\Documents\PPE Detection"
+venv\Scripts\activate
+
+python scripts/export_report.py                      # hari ini
+python scripts/export_report.py --days 7             # 7 hari terakhir
+python scripts/export_report.py --from 2026-09-01 --to 2026-09-30
+python scripts/export_report.py --out laporan.xlsx
+```
+
+Atau lewat Streamlit: **Fatigue & absensi** → tab **Laporan** → pilih periode →
+**Unduh laporan Excel**.
+
+File-nya berisi enam sheet, semuanya siap di-pivot:
+
+| Sheet | Isi |
+|---|---|
+| Ringkasan | Periode, jumlah data, dan cara membaca angkanya |
+| Rekap per orang | Satu baris per karyawan untuk seluruh periode |
+| Harian per orang | Satu baris per karyawan per hari |
+| Log absensi | Jam kedatangan |
+| Kejadian fatigue | Tiap kenaikan level ke WASPADA atau lebih, dengan alasannya |
+| Karyawan | Daftar terdaftar & jumlah foto wajahnya |
+
+> **Lama terpantau** dihitung dari jumlah cuplikan × interval (30 detik), bukan
+> dari selisih jam pertama dan terakhir. Waktu saat orangnya tidak terlihat
+> kamera tidak ikut dihitung — dan itu memang yang benar, karena selama itu
+> sistem tidak melihat apa pun tentang dia.
+
+---
+
 ## 5. API FastAPI
+
 
 ```powershell
 cd "C:\Users\HP\Documents\PPE Detection"
@@ -186,8 +223,8 @@ curl.exe http://localhost:8000/fatigue/attendance
 cd "C:\Users\HP\Documents\PPE Detection"
 venv\Scripts\activate
 
-pytest tests -q                    # semua (189 test)
-pytest tests -k fatigue -q         # modul fatigue saja (129 test)
+pytest tests -q                    # semua (214 test)
+pytest tests -k fatigue -q         # modul fatigue saja (152 test)
 pytest tests/test_fatigue_temporal.py -v
 ```
 

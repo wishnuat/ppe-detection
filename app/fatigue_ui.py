@@ -19,7 +19,8 @@ from __future__ import annotations
 
 import sys
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta
+from datetime import time as dtime
 from pathlib import Path
 
 import cv2
@@ -37,6 +38,8 @@ from src.fatigue.enrollment import MIN_ENROLL_FACE, enroll_photos
 from src.fatigue.face import FaceDetector, build_embedder
 from src.fatigue.fusion import FusionConfig, FusionWeights
 from src.fatigue.pipeline import FatiguePipeline, PipelineConfig
+from src.fatigue.records import FatigueLog
+from src.fatigue.report import build_report, to_excel_bytes
 from src.fatigue.types import FatigueLevel
 
 SESSION_DIR = PROJECT_ROOT / "outputs" / "sessions"
@@ -757,6 +760,101 @@ def run_attendance(book: AttendanceBook) -> None:
 
 
 # --------------------------------------------------------------------------
+# Laporan
+# --------------------------------------------------------------------------
+def run_report(book: AttendanceBook) -> None:
+    log = FatigueLog(db_path=book.db_path)
+    stats = log.stats()
+
+    st.caption(
+        "Laporan disusun dari cuplikan berkala yang tercatat selama sesi "
+        "monitoring berjalan. Kalau hasilnya kosong, jalankan tab **Monitor** "
+        "dulu — tidak ada data yang bisa dilaporkan sebelum ada yang diamati."
+    )
+
+    with st.container(horizontal=True):
+        st.metric("Cuplikan tersimpan", f"{stats['samples']:,}".replace(",", "."))
+        st.metric("Kejadian fatigue", stats["events"])
+        st.metric("Interval cuplikan", f"{stats['sample_interval']:.0f} dtk")
+
+    if stats["first_sample"]:
+        st.caption(
+            "Data tersedia dari "
+            f"**{datetime.fromtimestamp(stats['first_sample']):%d %b %Y %H:%M}** "
+            f"sampai **{datetime.fromtimestamp(stats['last_sample']):%d %b %Y %H:%M}**"
+        )
+
+    today = date.today()
+    with st.container(horizontal=True, vertical_alignment="bottom"):
+        preset = st.segmented_control(
+            "Periode", ["Hari ini", "7 hari", "30 hari", "Pilih sendiri"],
+            default="Hari ini", key="report_period",
+        ) or "Hari ini"
+
+    if preset == "Pilih sendiri":
+        with st.container(horizontal=True):
+            start_date = st.date_input("Dari", today - timedelta(days=7))
+            end_date = st.date_input("Sampai", today)
+    else:
+        span = {"Hari ini": 0, "7 hari": 6, "30 hari": 29}[preset]
+        start_date, end_date = today - timedelta(days=span), today
+
+    if start_date > end_date:
+        st.error("Tanggal mulai lebih akhir daripada tanggal selesai.",
+                 icon=":material/error:")
+        return
+
+    start = datetime.combine(start_date, dtime.min).timestamp()
+    # +1 hari supaya tanggal akhir ikut terhitung utuh.
+    end = datetime.combine(end_date + timedelta(days=1), dtime.min).timestamp()
+
+    report = build_report(db_path=book.db_path, start=start, end=end)
+    for note in report.notes:
+        st.info(note, icon=":material/info:")
+
+    summary = report.team_summary()
+    if not summary:
+        st.warning("Tidak ada data terpantau pada periode ini.",
+                   icon=":material/event_busy:")
+        return
+
+    st.subheader("Rekap per orang")
+    st.dataframe(
+        pd.DataFrame(summary), hide_index=True, key="report_summary",
+        column_config={
+            "PERCLOS rata2": st.column_config.ProgressColumn(
+                "PERCLOS rata2", min_value=0.0, max_value=0.5, format="percent"
+            ),
+        },
+    )
+
+    with st.expander("Rincian harian per orang", icon=":material/calendar_month:"):
+        st.dataframe(pd.DataFrame([d.to_row() for d in report.person_days]),
+                     hide_index=True)
+
+    if report.event_rows:
+        with st.expander(f"Kejadian fatigue ({len(report.event_rows)})",
+                         icon=":material/warning:"):
+            st.dataframe(pd.DataFrame(report.event_rows), hide_index=True)
+
+    st.subheader("Unduh")
+    label = f"{start_date:%Y%m%d}" + (f"_{end_date:%Y%m%d}" if start_date != end_date else "")
+    # Excel dibangun langsung, bukan di belakang tombol kedua: ukurannya
+    # puluhan KB dan membangunnya di sini membuat satu klik langsung mengunduh
+    # — bukan klik untuk menyiapkan, lalu klik lagi untuk mengunduh.
+    st.download_button(
+        "Unduh laporan Excel", data=to_excel_bytes(report),
+        file_name=f"laporan_fatigue_{label}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        icon=":material/download:", type="primary",
+    )
+    st.caption(
+        "Enam sheet: Ringkasan, Rekap per orang, Harian per orang, Log absensi, "
+        "Kejadian fatigue, dan Karyawan. Semuanya siap di-pivot."
+    )
+
+
+# --------------------------------------------------------------------------
 def render() -> None:
     """Titik masuk halaman, dipanggil dari app/streamlit_app.py."""
     init_state()
@@ -791,13 +889,15 @@ def render() -> None:
         )
 
     view = st.segmented_control(
-        "Tampilan", ["Monitor", "Karyawan", "Log absensi"], default="Monitor",
-        key="fatigue_view", label_visibility="collapsed",
+        "Tampilan", ["Monitor", "Karyawan", "Log absensi", "Laporan"],
+        default="Monitor", key="fatigue_view", label_visibility="collapsed",
     ) or "Monitor"
 
     if view == "Monitor":
         run_monitor(pipeline, cfg)
     elif view == "Karyawan":
         run_employees(book, cfg["embedder"])
-    else:
+    elif view == "Log absensi":
         run_attendance(book)
+    else:
+        run_report(book)

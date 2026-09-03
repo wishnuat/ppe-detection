@@ -43,7 +43,7 @@ def nudge(vec: np.ndarray, amount: float, seed: int = 0) -> np.ndarray:
 
 @pytest.fixture()
 def book(tmp_path: Path) -> AttendanceBook:
-    return AttendanceBook(db_path=tmp_path / "att.db", threshold=0.40, log_cooldown=300.0)
+    return AttendanceBook(db_path=tmp_path / "att.db", threshold=0.40, reentry_gap=300.0)
 
 
 # ---------- pendaftaran ----------
@@ -178,8 +178,8 @@ def test_check_in_ignores_unknown_person(book: AttendanceBook):
     assert book.records() == []
 
 
-def test_cooldown_prevents_one_row_per_frame(book: AttendanceBook):
-    """Orang yang berdiri di depan kamera 10 detik = satu baris, bukan 250."""
+def test_continuous_presence_records_one_arrival(book: AttendanceBook):
+    """Orang yang berdiri di depan kamera = satu baris, berapa pun lamanya."""
     identity = Identity("EMP001", "Budi", 0.9, True)
     book.add_employee("EMP001", "Budi")
 
@@ -189,12 +189,39 @@ def test_cooldown_prevents_one_row_per_frame(book: AttendanceBook):
     assert len(book.records()) == 1
 
 
-def test_cooldown_expires(book: AttendanceBook):
+def test_returning_after_absence_is_a_new_arrival(book: AttendanceBook):
+    """Pergi makan siang lalu kembali = kedatangan kedua."""
     identity = Identity("EMP001", "Budi", 0.9, True)
     book.add_employee("EMP001", "Budi")
     book.check_in(identity, now=1000.0)
     assert book.check_in(identity, now=1000.0 + 301.0) is not None
     assert len(book.records()) == 2
+
+
+def test_long_shift_without_absence_stays_one_row(book: AttendanceBook):
+    """Dua jam hadir terus-menerus tetap satu baris.
+
+    Cooldown sederhana akan menghasilkan satu baris tiap 5 menit — 24 baris
+    untuk satu shift 2 jam. Log absensi yang isinya begitu tidak menjawab
+    pertanyaan apa pun; yang dicari orang adalah jam kedatangan.
+    """
+    identity = Identity("EMP001", "Budi", 0.9, True)
+    book.add_employee("EMP001", "Budi")
+    for i in range(2 * 3600):          # terlihat tiap detik selama 2 jam
+        book.check_in(identity, now=1000.0 + i)
+    assert len(book.records()) == 1
+
+
+def test_cooldown_is_measured_from_last_sighting_not_last_row(book: AttendanceBook):
+    """Yang menentukan adalah kapan terakhir TERLIHAT, bukan terakhir dicatat."""
+    identity = Identity("EMP001", "Budi", 0.9, True)
+    book.add_employee("EMP001", "Budi")
+    book.check_in(identity, now=1000.0)
+    # Terlihat terus tiap 100 detik selama 10 menit — tidak pernah absen
+    # selama 300 detik, jadi tidak ada kedatangan baru meski total > 300 dtk.
+    for i in range(1, 7):
+        book.check_in(identity, now=1000.0 + i * 100)
+    assert len(book.records()) == 1
 
 
 def test_cooldown_is_per_person(book: AttendanceBook):

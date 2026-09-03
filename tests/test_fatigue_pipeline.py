@@ -125,7 +125,7 @@ def rig(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline_module, "build_embedder", lambda b=None: embedder)
 
     book = AttendanceBook(db_path=tmp_path / "att.db", threshold=0.40,
-                          log_cooldown=300.0)
+                          reentry_gap=300.0)
     classifier = FakeClassifier()
     pipe = FatiguePipeline(
         config=PipelineConfig(window_seconds=30.0, classifier_every=1,

@@ -27,6 +27,7 @@ from src.fatigue.classifier import FatigueClassifier, build_classifier
 from src.fatigue.face import FaceDetector, FaceEmbedder, build_embedder
 from src.fatigue.fusion import FatigueFusion, FusionConfig
 from src.fatigue.landmarks import FaceLandmarker
+from src.fatigue.records import FatigueLog
 from src.fatigue.temporal import PersonTracker
 from src.fatigue.types import (
     LEVEL_COLORS,
@@ -71,6 +72,11 @@ class PipelineConfig:
     # Lebih tua dari ini, posisinya sudah tidak bisa dipercaya.
     iou_max_age: float = 2.0
     enable_attendance: bool = True
+    # Simpan riwayat fatigue ke SQLite supaya bisa dilaporkan belakangan.
+    # Tanpa ini, PERCLOS dan microsleep hilang begitu aplikasi ditutup — dan
+    # pertanyaan paling wajar seorang supervisor ("minggu lalu siapa yang
+    # paling sering mengantuk?") tidak bisa dijawab sama sekali.
+    enable_recording: bool = True
     # CNN MATI secara default. Diukur pada tiga domain: di data latihnya sendiri
     # (foto internet) ia benar — rata-rata p(lelah) 0,12 untuk kelas non-lelah.
     # Pada wajah pekerja di foto lapangan nyata, rata-ratanya melompat ke 0,57
@@ -172,10 +178,16 @@ class FatiguePipeline:
                 self.fusion_config, weights=self.fusion_config.weights.without("cnn")
             )
 
+        self.log: FatigueLog | None = None
+        if self.config.enable_recording:
+            db = self.attendance.db_path if self.attendance is not None else None
+            self.log = FatigueLog(db_path=db, camera=self.config.camera_name)
+
         self._tracks: dict[str, _Track] = {}
         self._frame_index = 0
         self._unknown_counter = 0
         self.recent_checkins: list[AttendanceRecord] = []
+        self.recent_events: list = []
 
     # ---------- utilitas ----------
     @property
@@ -469,6 +481,15 @@ class FatiguePipeline:
                     # ada di database dan tidak perlu diduplikasi di sini.
                     del self.recent_checkins[:-50]
 
+        # Pencatatan dilakukan sekali per frame untuk semua orang sekaligus:
+        # `FatigueLog` sendiri yang memutuskan mana yang layak ditulis, jadi
+        # ketiga pemanggil (CLI, UI, API) mendapat kebijakan yang sama.
+        if self.log is not None and analysis.people:
+            new_events = self.log.record(analysis.people, now=t)
+            if new_events:
+                self.recent_events.extend(new_events)
+                del self.recent_events[:-50]
+
         self._evict_tracks(t)
         analysis.latency_ms = (time.perf_counter() - t_start) * 1000
         return analysis
@@ -533,6 +554,7 @@ def build_pipeline(**kwargs) -> FatiguePipeline:
     config = PipelineConfig(
         enable_attendance=os.getenv("FATIGUE_ATTENDANCE", "1") != "0",
         enable_classifier=os.getenv("FATIGUE_CLASSIFIER", "0") == "1",
+        enable_recording=os.getenv("FATIGUE_RECORDING", "1") != "0",
         camera_name=os.getenv("CAMERA_NAME", ""),
     )
     return FatiguePipeline(config=config, **kwargs)
