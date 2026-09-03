@@ -60,6 +60,9 @@ metodologi split per identitas (yang menutup kebocoran 32% pada split acak
 biasa), cara sistem memutuskan level, dan batasan yang perlu diketahui sebelum
 dipakai.
 
+⌨️ **Perintah siap-tempel: [`docs/PERINTAH_FATIGUE.md`](docs/PERINTAH_FATIGUE.md)**
+— setup, UI, CLI, API, pendaftaran wajah, training ulang, dan troubleshooting.
+
 ---
 
 ## 📌 Latar Belakang
