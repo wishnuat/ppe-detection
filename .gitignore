@@ -50,3 +50,24 @@ logs/
 # IDE
 .idea/
 .vscode/
+
+# ---------------------------------------------------------- fatigue & absensi
+# Bobot pihak ketiga (YuNet 227 KB, SFace 37 MB, FaceLandmarker 3,8 MB).
+# Tidak di-commit: sumber & sha256-nya sudah tercatat di src/fatigue/assets.py
+# dan diunduh otomatis saat pertama dipakai, jadi meng-commit-nya cuma
+# menggandakan 41 MB tanpa menambah satu pun jaminan reproducibility.
+models/fatigue/*.onnx
+models/fatigue/*.task
+
+# Checkpoint classifier fatigue. Aturan `*.pt` di atas sudah menjaringnya,
+# tapi ditulis eksplisit supaya tidak ikut ter-whitelist kalau suatu saat
+# aturan `!models/*.pt` diperluas.
+models/fatigue/fatigue_cls.pt
+models/fatigue/*_openvino_model/
+
+# Database absensi — berisi vektor biometrik karyawan. JANGAN pernah di-commit.
+data/
+*.db
+
+# Cache embedding hasil scripts/prepare_fatigue_dataset.py
+datasets/fatigue-embcache-*.npz

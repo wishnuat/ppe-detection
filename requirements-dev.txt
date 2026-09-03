@@ -2,3 +2,6 @@
 
 # Testing — versi yang dipakai saat 51 test hijau.
 pytest==9.1.1
+
+# Dibutuhkan fastapi.testclient (starlette) untuk test endpoint /fatigue/*.
+httpx2==2.12.0

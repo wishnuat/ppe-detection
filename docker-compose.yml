@@ -9,6 +9,10 @@ services:
     volumes:
       - ./models:/app/models
       - ./outputs:/app/outputs
+      # Database absensi (vektor biometrik karyawan). Di-mount sebagai volume
+      # supaya pendaftaran wajah bertahan saat container dibangun ulang — dan
+      # supaya data biometriknya tidak pernah ikut ter-bake ke dalam image.
+      - ./data:/app/data
       # Frontend statis di-mount supaya edit web/index.html langsung kelihatan
       # setelah refresh browser, tanpa rebuild image.
       - ./web:/app/web
@@ -32,4 +36,8 @@ services:
     volumes:
       - ./models:/app/models
       - ./outputs:/app/outputs
+      # Database absensi (vektor biometrik karyawan). Di-mount sebagai volume
+      # supaya pendaftaran wajah bertahan saat container dibangun ulang — dan
+      # supaya data biometriknya tidak pernah ikut ter-bake ke dalam image.
+      - ./data:/app/data
     command: streamlit run app/streamlit_app.py --server.address 0.0.0.0 --server.port 8501

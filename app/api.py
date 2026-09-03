@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import os
 from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
@@ -127,8 +128,22 @@ async def predict_image_only(file: UploadFile = File(...)) -> StreamingResponse:
     return StreamingResponse(BytesIO(buf.tobytes()), media_type="image/png")
 
 
-# Mount paling akhir: route eksplisit di atas (/health, /predict, /docs) sudah
-# terdaftar duluan sehingga tetap menang, dan sisanya jatuh ke frontend statis.
-# `html=True` membuat `/` melayani index.html.
+# Router fatigue & absensi dipasang opsional. Import-nya berat (mediapipe,
+# torch, model wajah) dan hanya berguna kalau bobotnya sudah diunduh, jadi
+# kegagalannya TIDAK boleh menjatuhkan layanan PPE — mesin edge yang cuma
+# dipakai untuk deteksi APD harus tetap hidup. Matikan eksplisit dengan
+# ENABLE_FATIGUE_API=0.
+if os.getenv("ENABLE_FATIGUE_API", "1") != "0":
+    try:
+        from app.fatigue_api import router as fatigue_router
+
+        app.include_router(fatigue_router)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[WARN] Endpoint /fatigue tidak aktif: {exc}")
+
+
+# Mount paling akhir: route eksplisit di atas (/health, /predict, /fatigue/*,
+# /docs) sudah terdaftar duluan sehingga tetap menang, dan sisanya jatuh ke
+# frontend statis. `html=True` membuat `/` melayani index.html.
 if WEB_DIR.is_dir():
     app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")

@@ -23,6 +23,14 @@ RUN pip install --upgrade pip && \
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
+# mediapipe dipasang TERPISAH dengan --no-deps, dan urutannya penting: kalau
+# resolver pip diizinkan menarik dependency-nya, ia memasang
+# opencv-contrib-python 5.x yang menimpa opencv-python 4.10 di atas dan
+# mengubah API yang dipakai src/detector.py. Yang benar-benar dibutuhkan cuma
+# absl-py dan sounddevice, dan keduanya sudah ada di requirements.txt.
+RUN pip install --no-deps mediapipe==1.0.1 && \
+    python -c "import cv2, mediapipe; assert cv2.__version__.startswith('4.10'), cv2.__version__"
+
 COPY src ./src
 COPY app ./app
 COPY web ./web
@@ -49,7 +57,12 @@ ENV HOME=/home/appuser \
     MPLCONFIGDIR=/home/appuser/.cache/matplotlib \
     YOLO_CONFIG_DIR=/home/appuser/.config/Ultralytics
 
-RUN mkdir -p /app/outputs "$MPLCONFIGDIR" "$YOLO_CONFIG_DIR" && \
+# /app/data menampung database absensi (SQLite). Dibuat & di-chown di sini
+# karena appuser tidak punya izin membuat folder di /app saat runtime, dan
+# AttendanceBook membuatnya saat pertama dipakai — tanpa langkah ini, endpoint
+# /fatigue/* mati dengan PermissionError yang penyebabnya jauh dari gejalanya.
+RUN mkdir -p /app/outputs /app/data /app/models/fatigue \
+        "$MPLCONFIGDIR" "$YOLO_CONFIG_DIR" && \
     chown -R appuser:appuser /app /home/appuser
 
 USER appuser

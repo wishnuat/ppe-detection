@@ -1,0 +1,11 @@
+Folder ini diisi saat runtime:
+
+    face_detection_yunet_2023mar.onnx     unduh: python -m src.fatigue.assets
+    face_recognition_sface_2021dec.onnx   unduh: python -m src.fatigue.assets
+    face_landmarker.task                  unduh: python -m src.fatigue.assets
+    fatigue_cls.pt                        latih: python scripts/train_fatigue.py
+    fatigue_cls*_openvino_model/          export: python scripts/export_fatigue.py
+
+Semuanya ada di .gitignore. Sumber dan sha256 bobot pihak ketiga tercatat di
+src/fatigue/assets.py, jadi hasil unduhannya terverifikasi dan tidak perlu
+di-commit.

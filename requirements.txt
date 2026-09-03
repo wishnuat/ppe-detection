@@ -57,3 +57,40 @@ openvino==2026.3.0
 nncf==3.3.0
 # Export OpenVINO lewat Ultralytics melewati ONNX sebagai format perantara.
 onnx==1.22.0
+
+# Dibutuhkan HANYA saat export ONNX (scripts/export_fatigue.py). torch >= 2.9
+# memakai exporter berbasis torch.export yang mengimpor onnxscript di level
+# modul — jadi `import torch.onnx` gagal tanpa paket ini, bahkan ketika
+# exporter lamanya (dynamo=False) yang dipakai. Aman dihapus di image deploy.
+onnxscript==0.7.1
+
+# ------------------------------------------------- fatigue detection & absensi
+# Landmark wajah 478 titik + blendshape (src/fatigue/landmarks.py).
+#
+# PENTING: install dengan --no-deps. Dependency mediapipe menarik
+# opencv-contrib-python 5.x yang akan MENIMPA opencv-python 4.10 di atas dan
+# mengubah API yang dipakai src/detector.py. Yang benar-benar dibutuhkan cuma
+# absl-py dan sounddevice, jadi keduanya dipasang terpisah:
+#
+#   pip install --no-deps mediapipe==1.0.1
+#   pip install "absl-py>=2.0" "sounddevice~=0.5"
+#
+# Deteksi wajah (YuNet) dan pengenalan wajah (SFace) TIDAK butuh paket apa pun:
+# keduanya jalan lewat cv2.FaceDetectorYN / cv2.FaceRecognizerSF yang sudah ada
+# di opencv-python. Bobotnya diunduh otomatis oleh src/fatigue/assets.py.
+mediapipe==1.0.1
+absl-py==2.5.0
+sounddevice==0.5.6
+
+# scikit-learn: metrik evaluasi classifier fatigue (ROC-AUC, PR-AUC, confusion
+# matrix) di scripts/train_fatigue.py & scripts/evaluate_fatigue.py.
+# Tidak dipakai saat inference — aman dihapus di image deploy.
+scikit-learn==1.9.0
+
+# pandas: tabel di halaman Streamlit fatigue (app/fatigue_ui.py).
+pandas==3.0.5
+
+# OPSIONAL — backend face recognition alternatif (lebih akurat pada pose
+# ekstrem, tapi +330 MB bobot dan butuh build tools di Windows).
+# Aktifkan dengan EMBEDDER_BACKEND=insightface.
+#   pip install insightface onnxruntime

@@ -21,3 +21,11 @@ frame.jpg
 # Yang dibuang cuma checkpoint mentah yang tidak dipakai runtime.
 models/yolov8n.pt
 models/last.pt
+# Database absensi berisi vektor biometrik karyawan — JANGAN pernah ikut
+# ter-bake ke dalam image. Di-mount sebagai volume lewat docker-compose.
+data/
+*.db
+# Bobot wajah pihak ketiga (41 MB) diunduh saat runtime oleh
+# src/fatigue/assets.py, dengan verifikasi sha256.
+models/fatigue/*.onnx
+models/fatigue/*.task

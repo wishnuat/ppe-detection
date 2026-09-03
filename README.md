@@ -28,6 +28,40 @@ Buka **http://localhost:8000** — frontend demo, Swagger di `/docs`.
 
 ---
 
+## 🧠 Modul tambahan: Deteksi Fatigue & Absensi Wajah
+
+Dari aliran CCTV yang sama, modul kedua menjawab dua pertanyaan yang tidak bisa
+dijawab deteksi APD: **siapa yang ada di sini**, dan **bagaimana kondisinya**.
+
+- **Absensi face recognition** — YuNet + SFace lewat `cv2` yang sudah ada (nol
+  dependency baru), database SQLite offline, pendaftaran banyak foto per orang.
+- **Deteksi fatigue** — CNN penampakan wajah (dilatih dari dataset Kaggle)
+  **digabung** dengan sinyal perilaku temporal: PERCLOS, microsleep, laju kedip,
+  menguap, dan kepala terkulai — dengan kalibrasi ambang mata per orang.
+
+Kelelahan bukan properti satu frame: orang yang berkedip dan orang yang
+tertidur terlihat identik dalam satu gambar diam. Karena itu keluaran CNN tidak
+pernah dipakai sendirian.
+
+```bash
+pip install --no-deps mediapipe==1.0.1 && pip install "absl-py>=2.0" "sounddevice~=0.5"
+python -m src.fatigue.assets              # unduh bobot wajah (41 MB, sha256-verified)
+python scripts/prepare_fatigue_dataset.py # dataset: crop wajah + split per identitas
+python scripts/train_fatigue.py           # latih classifier
+python scripts/enroll_faces.py --webcam --id EMP001 --name "Budi Santoso"
+python -m src.fatigue.cli webcam          # jalankan
+```
+
+Di Streamlit, pilih **Fatigue & absensi** di sidebar. Di FastAPI, endpoint-nya
+ada di `/fatigue/*`.
+
+📖 **Dokumentasi lengkap: [`docs/FATIGUE.md`](docs/FATIGUE.md)** — termasuk
+metodologi split per identitas (yang menutup kebocoran 32% pada split acak
+biasa), cara sistem memutuskan level, dan batasan yang perlu diketahui sebelum
+dipakai.
+
+---
+
 ## 📌 Latar Belakang
 
 Kepatuhan penggunaan APD di lingkungan kerja industri (tambang, konstruksi,
@@ -830,6 +864,13 @@ dashcam**:
 6. **On-device optimization** — ✅ **OpenVINO FP32 + INT8 sudah jalan** (lihat
    `docs/BENCHMARK.md`), yang langsung relevan untuk edge box berbasis Intel.
    Berikutnya: **ONNX / TensorRT / NCNN** untuk Jetson dan dashcam Android.
+7. **Deteksi fatigue driver & absensi** — ✅ **sudah jalan** (lihat
+   `docs/FATIGUE.md`). Untuk armada, ini justru pasangan alami deteksi APD:
+   kamera in-cabin yang sama sekaligus mengukur PERCLOS dan microsleep driver,
+   dan mengenali siapa yang sedang memegang kemudi. Berikutnya: kalibrasi
+   ulang dengan data dari kamera in-cabin sendiri (dataset publik yang dipakai
+   sekarang berisi foto internet, bukan frame dashcam), dan penggabungan
+   event fatigue ke pipeline alert yang sama dengan pelanggaran APD.
 
 ---
 

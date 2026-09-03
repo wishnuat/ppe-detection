@@ -906,6 +906,23 @@ def run_webcam(detector: PPEDetector, engine: AlertEngine, cfg: dict) -> None:
 def main() -> None:
     init_state()
 
+    # Pemilih modul ditaruh paling atas di sidebar: sisa sidebar-nya berbeda
+    # total antara APD dan fatigue, dan menampilkan keduanya sekaligus akan
+    # membuat operator mengatur hal yang tidak sedang ia pakai.
+    module = st.sidebar.segmented_control(
+        "Modul", ["APD", "Fatigue & absensi"], default="APD",
+        key="active_module", label_visibility="collapsed",
+    ) or "APD"
+
+    if module == "Fatigue & absensi":
+        # Import ditunda sampai modulnya dipilih — mediapipe, torch, dan tiga
+        # model wajah butuh beberapa detik dan ratusan MB, dan pengguna yang
+        # hanya memantau APD tidak perlu membayarnya.
+        from app import fatigue_ui
+
+        fatigue_ui.render()
+        return
+
     mode, backend, device = sidebar_model()
     conf, iou, overrides = sidebar_sensitivity()
     enabled = sidebar_categories()
