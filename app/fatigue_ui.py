@@ -191,10 +191,19 @@ def sidebar_settings() -> dict:
                  "`python scripts/export_fatigue.py` dulu untuk membuat IR-nya.",
         )
         use_classifier = st.toggle(
-            "Pakai CNN penampakan wajah", value=True,
-            help="Kalau dimatikan, penilaian murni dari sinyal perilaku "
-                 "(PERCLOS, kedip, menguap, terkulai).",
+            "Pakai CNN penampakan wajah", value=False,
+            help="Mati secara default. Pada wajah kamera nyata model ini "
+                 "terukur tidak andal — 59% pekerja biasa di foto lapangan "
+                 "ditandai lelah. Penilaian tanpa CNN memakai sinyal perilaku "
+                 "(PERCLOS, microsleep, kedip, menguap, terkulai), yang "
+                 "semuanya pengukuran fisik dan tidak peduli bentuk wajah.",
         )
+        if use_classifier:
+            st.warning(
+                "CNN aktif. Nyalakan ini hanya setelah model dilatih ulang "
+                "dengan frame dari kamera Anda sendiri.",
+                icon=":material/model_training:",
+            )
 
     with st.sidebar.expander("Kepekaan", expanded=True, icon=":material/tune:"):
         window = st.slider(
@@ -772,11 +781,13 @@ def render() -> None:
     book = load_attendance(cfg["embedder"])
 
     if pipeline.classifier is None:
-        st.warning(
-            "CNN fatigue tidak aktif — penilaian memakai sinyal perilaku saja. "
-            "Latih dulu dengan `python scripts/prepare_fatigue_dataset.py` lalu "
-            "`python scripts/train_fatigue.py`.",
-            icon=":material/model_training:",
+        # Ini keadaan yang DIINGINKAN, bukan kegagalan — jadi caption, bukan
+        # warning. Pesan sebelumnya menyuruh melatih model, dan itu menyesatkan
+        # sejak CNN sengaja dimatikan sebagai default.
+        st.caption(
+            ":material/shield: Penilaian memakai sinyal perilaku saja — PERCLOS, "
+            "microsleep, laju kedip, menguap, dan kepala terkulai. Semuanya "
+            "pengukuran fisik yang tidak terpengaruh bentuk wajah siapa pun."
         )
 
     view = st.segmented_control(

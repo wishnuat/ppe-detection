@@ -78,8 +78,9 @@ python -m src.fatigue.cli webcam --index 1 --save outputs/uji_fatigue.mp4
 # tanpa absensi — tidak memuat model wajah 37 MB, lebih cepat start
 python -m src.fatigue.cli --no-attendance webcam
 
-# tanpa CNN — murni sinyal perilaku (PERCLOS, kedip, menguap, terkulai)
-python -m src.fatigue.cli --no-classifier webcam
+# CNN mati secara DEFAULT (terukur tidak andal di wajah kamera nyata).
+# Nyalakan hanya setelah model dilatih ulang dengan frame kamera Anda:
+python -m src.fatigue.cli --classifier webcam
 
 # pakai OpenVINO (2-3x lebih cepat, akurasi identik)
 python -m src.fatigue.cli --classifier-backend openvino webcam
@@ -185,8 +186,8 @@ curl.exe http://localhost:8000/fatigue/attendance
 cd "C:\Users\HP\Documents\PPE Detection"
 venv\Scripts\activate
 
-pytest tests -q                    # semua (155 test)
-pytest tests -k fatigue -q         # modul fatigue saja (104 test)
+pytest tests -q                    # semua (180 test)
+pytest tests -k fatigue -q         # modul fatigue saja (129 test)
 pytest tests/test_fatigue_temporal.py -v
 ```
 
@@ -253,4 +254,5 @@ Hasilnya ke `outputs/fatigue/benchmark*.json`, terurai per komponen.
 | `Checkpoint fatigue tidak ditemukan` | Belum dilatih. Jalankan bagian 7, atau pakai `--no-classifier` untuk mode sinyal perilaku saja. |
 | Level selalu `TIDAK_DIKETAHUI` | Wajah belum terlihat ≥ 5 detik, atau < 40% frame menghasilkan landmark. Dekatkan wajah ke kamera dan hadap depan. |
 | Webcam gagal dibuka | Coba `--index 1` atau `--index 2`. Pastikan aplikasi lain (Zoom/Teams) tidak sedang memakai kamera. |
-| Streamlit lambat / FPS rendah | Wajar — lihat [Performa](FATIGUE.md#performa). Turunkan "Batas FPS", atau pilih backend `openvino-int8` di sidebar. |
+| Streamlit lambat / FPS rendah | Wajar — lihat [Performa](FATIGUE.md#performa). Turunkan "Batas FPS" di sidebar. |
+| Level naik padahal saya segar | Pastikan toggle "Pakai CNN penampakan wajah" **mati** (default). CNN terukur menandai 59% wajah nyata sebagai lelah — lihat [alasannya](FATIGUE.md#cnn-dimatikan-secara-default--inilah-alasannya). |

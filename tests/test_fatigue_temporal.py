@@ -363,3 +363,50 @@ def test_score_never_exceeds_one():
 def test_ascending_thresholds_are_enforced():
     with pytest.raises(ValueError):
         FusionConfig(mild_at=0.6, severe_at=0.4, critical_at=0.8)
+
+
+# ---------- mematikan sumber ----------
+def test_without_renormalizes_remaining_weights():
+    """Membuang satu sumber tidak boleh menyusutkan skala skor.
+
+    Kalau bobot CNN (0,20) sekadar dibiarkan menyumbang nol, skor maksimum
+    yang mungkin jadi 0,80 — sehingga ambang KRITIS 0,70 nyaris mustahil
+    tercapai dan seluruh sistem jadi tumpul tanpa ada yang menyadarinya.
+    """
+    weights = FusionWeights().without("cnn")
+    as_dict = weights.as_dict()
+    assert as_dict["cnn"] == 0.0
+    assert sum(as_dict.values()) == pytest.approx(1.0)
+
+
+def test_without_keeps_relative_proportions():
+    full = FusionWeights().as_dict()
+    trimmed = FusionWeights().without("cnn").as_dict()
+    # PERCLOS tetap 4x bobot kedip, sebelum maupun sesudah.
+    assert trimmed["perclos"] / trimmed["blink"] == pytest.approx(
+        full["perclos"] / full["blink"]
+    )
+
+
+def test_invariant_survives_removing_cnn():
+    """Hanya PERCLOS yang boleh naik sendirian — juga saat CNN dimatikan."""
+    config = FusionConfig(weights=FusionWeights().without("cnn"))
+    assert config.sources_that_can_escalate_alone() == ["perclos"]
+
+
+def test_full_score_reachable_without_cnn():
+    fusion = FatigueFusion(FusionConfig(weights=FusionWeights().without("cnn")))
+    score, _ = fusion.score(
+        summary(perclos=1.0, blink_rate=100.0, yawn_rate=100.0, nod_rate=100.0)
+    )
+    assert score == pytest.approx(1.0)
+
+
+def test_removing_unknown_source_is_rejected():
+    with pytest.raises(ValueError, match="tidak dikenal"):
+        FusionWeights().without("eeg")
+
+
+def test_removing_every_source_is_rejected():
+    with pytest.raises(ValueError):
+        FusionWeights().without("cnn", "perclos", "blink", "yawn", "nod")

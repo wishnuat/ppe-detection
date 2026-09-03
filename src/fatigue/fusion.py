@@ -90,6 +90,27 @@ class FusionWeights:
         return {"cnn": w.cnn, "perclos": w.perclos, "blink": w.blink,
                 "yawn": w.yawn, "nod": w.nod}
 
+    def without(self, *sources: str) -> "FusionWeights":
+        """Bobot tanpa sumber tertentu, dinormalisasi ulang atas sisanya.
+
+        Dipakai saat sebuah sumber benar-benar mati — misalnya classifier CNN
+        yang dinonaktifkan. Kalau bobotnya sekadar dibiarkan menyumbang nol,
+        skala skornya menyusut diam-diam: dengan CNN mati dan bobotnya 0,20,
+        skor maksimum yang mungkin cuma 0,80, sehingga ambang KRITIS 0,70
+        praktis mustahil dicapai dan seluruh sistem jadi lebih tumpul tanpa
+        ada yang menyadarinya.
+
+        Menormalisasi ulang membuat ambang tetap berarti sama.
+        """
+        unknown = set(sources) - set(self.as_dict())
+        if unknown:
+            raise ValueError(f"Sumber tidak dikenal: {sorted(unknown)}")
+        kept = {k: v for k, v in vars(self).items() if k not in sources}
+        if not kept or sum(kept.values()) <= 0:
+            raise ValueError("Tidak boleh mematikan semua sumber bukti")
+        return FusionWeights(**{k: (0.0 if k in sources else v)
+                                for k, v in vars(self).items()}).normalized()
+
 
 @dataclass
 class FusionConfig:

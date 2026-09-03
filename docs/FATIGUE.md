@@ -301,6 +301,52 @@ bisa dipulihkan di mana pun.
 > mengatur angka yang dilaporkan `scripts/evaluate_fatigue.py` dan pemakaian
 > model secara berdiri sendiri.
 
+### CNN dimatikan secara default — inilah alasannya
+
+Angka di atas diukur pada test set, yang berasal dari domain yang sama dengan
+data latih: foto internet terkurasi. Di sana model ini benar. Pada wajah yang
+akan benar-benar dilihat kamera, ia tidak.
+
+Diukur pada tiga domain, semuanya memakai jalur inferensi yang sama:
+
+| Domain | rata² p(lelah) | >0,5 | >0,9 |
+|---|---:|---:|---:|
+| Crop "nonfatigue" test set (foto internet — domain latihnya) | **0,123** | 8,0% | 0,7% |
+| Wajah pekerja di dataset PPE (foto lapangan sungguhan) | **0,567** | 59,3% | 16,0% |
+| Satu wajah webcam, 5 foto rentang 6 bulan | **0,952** | — | 80% |
+
+Baris kedua yang menentukan: **59% pekerja biasa di foto lapangan ditandai
+lelah.** Baris ketiga menunjukkan bentuk kegagalannya dengan lebih jelas —
+lima foto orang yang sama, diambil di hari berbeda sepanjang enam bulan,
+memberi 0,904–0,986. Sebaran 0,082. Itu konstanta yang menempel pada wajah
+seseorang, bukan pengukuran kondisinya.
+
+Konsekuensi praktisnya terukur. PERCLOS yang dibutuhkan untuk memicu WASPADA:
+
+| Setelan | Wajah dengan CNN 0,98 | Wajah dengan CNN 0,05 |
+|---|---:|---:|
+| Bobot seimbang | **9,0%** | 28,0% |
+| Fokus perilaku | 16,5% | 24,5% |
+| CNN dimatikan | 29,0% | 29,0% |
+
+Orang yang kebetulan "berwajah lelah" menurut model jadi 3× lebih sensitif
+daripada rekannya, tanpa alasan apa pun yang berhubungan dengan kondisinya.
+
+Karena itu `enable_classifier` **default-nya `False`**. Sinyal perilaku tidak
+punya masalah ini: PERCLOS, microsleep, laju kedip, menguap, dan kepala
+terkulai semuanya pengukuran fisik dengan definisi yang jelas, dan tidak peduli
+bentuk wajah siapa pun.
+
+Nyalakan lagi (`--classifier`, atau `FATIGUE_CLASSIFIER=1`) **setelah** model
+dilatih ulang dengan frame dari kamera Anda sendiri. `scripts/train_fatigue.py`
+menerima folder `fatigue/` dan `nonfatigue/` mana pun, jadi jalurnya sudah siap.
+
+Saat CNN mati, bobotnya dibuang dan sisanya **dinormalisasi ulang**. Kalau
+tidak, skor maksimum yang mungkin cuma 0,80 — ambang KRITIS 0,70 nyaris
+mustahil tercapai dan seluruh sistem jadi tumpul tanpa ada yang menyadarinya.
+Invarian "hanya PERCLOS yang boleh menaikkan level sendirian" tetap berlaku
+setelah normalisasi ulang, dan itu diuji.
+
 ### Kalibrasi probabilitas
 
 Karena fusi memakai probabilitas mentah, yang penting bukan ambangnya melainkan
@@ -868,6 +914,6 @@ tests/
     test_fatigue_classifier.py   kesetaraan preprocessing training vs inferensi
     test_fatigue_enrollment.py   aturan penerimaan foto, dan bahwa ketiganya sama
 
-120 test, semuanya jalan tanpa GPU. Yang butuh bobot atau checkpoint akan
+129 test, semuanya jalan tanpa GPU. Yang butuh bobot atau checkpoint akan
 di-skip, bukan gagal, kalau file-nya belum ada.
 ```

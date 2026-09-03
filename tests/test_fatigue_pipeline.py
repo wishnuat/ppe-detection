@@ -377,3 +377,56 @@ def test_max_faces_is_respected(rig):
                         [300, 0, 390, 90]]]
     analysis = pipe.process_frame(frame, now=0.0)
     assert len(analysis.faces) == 2
+
+
+# ---------- default classifier ----------
+def test_classifier_is_off_by_default():
+    """CNN mati secara default.
+
+    Terukur: pada wajah pekerja di foto lapangan nyata, 59% orang biasa
+    ditandai lelah; pada wajah webcam yang diuji ia memberi 0,90-0,99 konstan
+    di lima foto rentang enam bulan. Itu konstanta, bukan pengukuran.
+    """
+    assert PipelineConfig().enable_classifier is False
+
+
+def test_pipeline_without_classifier_renormalizes_weights(rig):
+    """Skor maksimum harus tetap bisa mencapai 1,0 tanpa CNN."""
+    _, detector, _, _, _, book, frame = rig
+    monkey = FatiguePipeline(
+        config=PipelineConfig(enable_attendance=False, enable_classifier=False),
+    )
+    weights = monkey.fusion_config.weights.as_dict()
+    assert weights["cnn"] == 0.0
+    assert sum(weights.values()) == pytest.approx(1.0)
+    monkey.close()
+
+
+def test_explicit_classifier_is_honoured_even_when_flag_is_off(rig, monkeypatch):
+    """Menyerahkan objek classifier berarti ingin ia dipakai.
+
+    Mengabaikannya diam-diam karena sebuah flag adalah jebakan — dan itulah
+    yang terjadi saat default-nya diubah jadi mati.
+    """
+    detector = FakeDetector()
+    detector.script = [[[100, 100, 200, 200]]] * 6
+    monkeypatch.setattr(pipeline_module, "FaceDetector", lambda **kw: detector)
+    monkeypatch.setattr(pipeline_module, "FaceLandmarker", lambda **kw: FakeLandmarker())
+
+    classifier = FakeClassifier()
+    pipe = FatiguePipeline(
+        config=PipelineConfig(enable_attendance=False, enable_classifier=False,
+                              classifier_every=1),
+        classifier=classifier,
+    )
+    assert pipe.classifier is classifier
+    # Bobot CNN dipertahankan karena classifier-nya memang ada.
+    assert pipe.fusion_config.weights.as_dict()["cnn"] > 0
+    for i in range(3):
+        pipe.process_frame(frame_of(), now=i * 0.1)
+    assert classifier.calls == 3
+    pipe.close()
+
+
+def frame_of() -> np.ndarray:
+    return np.zeros((480, 640, 3), dtype=np.uint8)

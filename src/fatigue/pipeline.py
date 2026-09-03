@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import cv2
 import numpy as np
@@ -71,7 +71,21 @@ class PipelineConfig:
     # Lebih tua dari ini, posisinya sudah tidak bisa dipercaya.
     iou_max_age: float = 2.0
     enable_attendance: bool = True
-    enable_classifier: bool = True
+    # CNN MATI secara default. Diukur pada tiga domain: di data latihnya sendiri
+    # (foto internet) ia benar — rata-rata p(lelah) 0,12 untuk kelas non-lelah.
+    # Pada wajah pekerja di foto lapangan nyata, rata-ratanya melompat ke 0,57
+    # dan 59% orang biasa ditandai lelah. Pada wajah webcam yang diuji, ia
+    # memberi 0,90-0,99 secara konstan di lima foto berbeda rentang enam bulan
+    # — itu konstanta, bukan pengukuran.
+    #
+    # Sinyal perilaku (PERCLOS, microsleep, kedip, menguap, terkulai) tidak
+    # punya masalah ini: semuanya pengukuran fisik yang tidak peduli bentuk
+    # wajah siapa pun. Jadi default-nya berpihak ke sana.
+    #
+    # Nyalakan lagi (`--classifier`, atau FATIGUE_CLASSIFIER=1) setelah model
+    # dilatih ulang dengan frame dari kamera Anda sendiri — di domain itu ia
+    # bisa jadi berguna, dan `scripts/train_fatigue.py` siap menerimanya.
+    enable_classifier: bool = False
     window_seconds: float = 60.0
     camera_name: str = ""
 
@@ -132,20 +146,31 @@ class FatiguePipeline:
                 backend=self.embedder.backend, threshold=self.embedder.threshold
             )
 
-        self.classifier: FatigueClassifier | None = None
-        if self.config.enable_classifier:
-            if classifier is not None:
-                self.classifier = classifier
-            else:
-                try:
-                    self.classifier = build_classifier(classifier_backend)
-                except FileNotFoundError as exc:
-                    # Pipeline tetap berguna tanpa CNN — sinyal temporal saja
-                    # sudah menangkap mayoritas kasus. Menolak jalan sama
-                    # sekali hanya karena checkpoint belum dilatih akan
-                    # membuat fitur absensi ikut mati tanpa alasan.
-                    print(f"[WARN] Classifier fatigue tidak aktif: {exc}")
-                    self.classifier = None
+        # `enable_classifier` berarti "muatkan satu untukku dari disk".
+        # Menyerahkan objek `classifier` secara eksplisit selalu dihormati —
+        # pemanggil yang repot membuatnya jelas ingin ia dipakai, dan
+        # mengabaikannya diam-diam karena sebuah flag adalah jebakan.
+        self.classifier: FatigueClassifier | None = classifier
+        if self.classifier is None and self.config.enable_classifier:
+            try:
+                self.classifier = build_classifier(classifier_backend)
+            except FileNotFoundError as exc:
+                # Pipeline tetap berguna tanpa CNN — sinyal perilaku saja
+                # sudah menangkap mayoritas kasus, dan justru lebih dapat
+                # dipercaya. Menolak jalan sama sekali hanya karena checkpoint
+                # belum dilatih akan mematikan fitur absensi tanpa alasan.
+                print(f"[WARN] Classifier fatigue tidak aktif: {exc}")
+                self.classifier = None
+
+        # Kalau tidak ada classifier, bobot CNN dibuang dan sisanya
+        # dinormalisasi ulang. Membiarkannya menyumbang nol akan menyusutkan
+        # skala skor diam-diam — skor maksimum jadi 0,80 sehingga ambang KRITIS
+        # 0,70 nyaris mustahil tercapai, dan sistemnya jadi tumpul tanpa ada
+        # yang menyadarinya.
+        if self.classifier is None:
+            self.fusion_config = replace(
+                self.fusion_config, weights=self.fusion_config.weights.without("cnn")
+            )
 
         self._tracks: dict[str, _Track] = {}
         self._frame_index = 0
@@ -174,6 +199,14 @@ class FatiguePipeline:
         alasan untuk melupakan apa yang sudah diamati satu menit terakhir.
         """
         if fusion_config is not None:
+            # Bobot CNN dibuang lagi kalau classifier-nya memang tidak ada —
+            # sidebar UI mengirim bobot lengkap tiap rerun, dan tanpa langkah
+            # ini setelan pertama akan benar lalu diam-diam rusak begitu
+            # operator menggeser slider apa pun.
+            if self.classifier is None:
+                fusion_config = replace(
+                    fusion_config, weights=fusion_config.weights.without("cnn")
+                )
             self.fusion_config = fusion_config
             for track in self._tracks.values():
                 track.fusion.config = fusion_config
@@ -499,7 +532,7 @@ def build_pipeline(**kwargs) -> FatiguePipeline:
     """Bangun pipeline dengan default dari environment."""
     config = PipelineConfig(
         enable_attendance=os.getenv("FATIGUE_ATTENDANCE", "1") != "0",
-        enable_classifier=os.getenv("FATIGUE_CLASSIFIER", "1") != "0",
+        enable_classifier=os.getenv("FATIGUE_CLASSIFIER", "0") == "1",
         camera_name=os.getenv("CAMERA_NAME", ""),
     )
     return FatiguePipeline(config=config, **kwargs)

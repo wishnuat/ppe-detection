@@ -30,7 +30,7 @@ def build(args: argparse.Namespace) -> FatiguePipeline:
     config = PipelineConfig(
         window_seconds=args.window,
         enable_attendance=not args.no_attendance,
-        enable_classifier=not args.no_classifier,
+        enable_classifier=args.classifier,
         max_faces=args.max_faces,
         camera_name=args.camera_name,
     )
@@ -212,8 +212,12 @@ def main() -> None:
                     help="Label kamera yang ikut tercatat di log absensi.")
     ap.add_argument("--no-attendance", action="store_true",
                     help="Matikan absensi (tidak memuat model embedding 37 MB).")
-    ap.add_argument("--no-classifier", action="store_true",
-                    help="Matikan CNN, pakai sinyal temporal saja.")
+    ap.add_argument("--classifier", action=argparse.BooleanOptionalAction,
+                    default=False,
+                    help="Nyalakan CNN penampakan wajah. MATI secara default: "
+                         "pada wajah kamera nyata ia terukur tidak andal (59% "
+                         "pekerja biasa ditandai lelah). Nyalakan setelah model "
+                         "dilatih ulang dengan frame dari kamera Anda sendiri.")
 
     sub = ap.add_subparsers(dest="mode", required=True)
 
