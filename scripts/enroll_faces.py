@@ -17,11 +17,16 @@ Perintah tambahan:
 Nama karyawan diambil dari `--name`, atau dari file `name.txt` di dalam
 foldernya, atau — kalau keduanya tidak ada — dari nama folder itu sendiri.
 
-Kualitas pendaftaran menentukan kualitas absensi jauh lebih besar daripada
+Kualitas pendaftaran menentukan keandalan absensi jauh lebih besar daripada
 model yang dipakai. Script ini menolak foto yang wajahnya tidak terdeteksi,
-terlalu kecil, atau menghadap terlalu miring, dan memberi tahu alasannya —
-lebih baik ditolak sekarang daripada jadi karyawan yang "kadang tidak
-terbaca" selama berbulan-bulan.
+berisi lebih dari satu orang, terlalu kecil, atau nyaris identik dengan foto
+yang sudah ada — dan menyebutkan alasannya, karena lebih baik ditolak sekarang
+daripada jadi karyawan yang "kadang tidak terbaca" berbulan-bulan.
+
+Hal lain (mis. foto yang agak buram) hanya diperingatkan, tidak diblokir.
+Orang yang gagal mendaftar sama sekali tidak akan pernah dikenali kamera, jadi
+gerbang yang terlalu ketat justru lebih merugikan daripada foto yang kurang
+ideal — lihat catatan di `SOFT_SHARPNESS` untuk pengukuran yang mendasarinya.
 """
 from __future__ import annotations
 
@@ -38,39 +43,13 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.fatigue.attendance import AttendanceBook  # noqa: E402
+from src.fatigue.enrollment import (  # noqa: E402
+    IMAGE_SUFFIXES,
+    MIN_ENROLL_FACE,
+    check_photo,
+    enroll_photos,
+)
 from src.fatigue.face import FaceDetector, build_embedder  # noqa: E402
-
-IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
-
-# Wajah di bawah ini terlalu sedikit pikselnya untuk menghasilkan embedding
-# yang stabil — lebih besar dari ambang deteksi runtime, karena foto
-# pendaftaran memang bisa dipilih dan tidak ada alasan menerima yang buruk.
-MIN_ENROLL_FACE = 80
-# Kemiripan maksimum antar foto pendaftaran orang yang sama. Di atas ini, foto
-# barunya nyaris duplikat: menambahkannya tidak memperluas cakupan pose apa pun,
-# cuma memperbesar database.
-DUPLICATE_SIM = 0.97
-
-
-def quality_check(img: np.ndarray, faces: list) -> tuple[bool, str]:
-    """(diterima, alasan) untuk satu foto pendaftaran."""
-    if not faces:
-        return False, "wajah tidak terdeteksi"
-    if len(faces) > 1:
-        return False, f"ada {len(faces)} wajah — foto pendaftaran harus satu orang"
-    face = faces[0]
-    x1, y1, x2, y2 = face.bbox
-    if min(x2 - x1, y2 - y1) < MIN_ENROLL_FACE:
-        return False, f"wajah terlalu kecil ({x2 - x1}x{y2 - y1} px, minimal {MIN_ENROLL_FACE})"
-
-    # Blur dinilai dari variance Laplacian pada area wajah saja: latar yang
-    # tajam bisa menutupi wajah yang buram kalau dihitung se-frame.
-    crop = img[y1:y2, x1:x2]
-    sharpness = cv2.Laplacian(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var()
-    if sharpness < 40.0:
-        return False, f"foto terlalu buram (ketajaman {sharpness:.0f}, minimal 40)"
-    return True, "ok"
-
 
 def enroll_images(
     book: AttendanceBook,
@@ -81,40 +60,18 @@ def enroll_images(
     department: str,
     paths: list[Path],
 ) -> tuple[int, int]:
-    """Daftarkan sekumpulan foto. Kembalikan (diterima, ditolak)."""
-    book.add_employee(employee_id, name, department)
-    accepted: list[np.ndarray] = []
-    rejected = 0
-
-    for path in paths:
-        img = cv2.imread(str(path))
-        if img is None:
-            print(f"    [SKIP] {path.name}: gagal dibaca")
-            rejected += 1
+    """Daftarkan sekumpulan file foto. Kembalikan (diterima, ditolak)."""
+    photos = [(path.name, cv2.imread(str(path))) for path in paths]
+    result = enroll_photos(book, detector, embedder, employee_id, name,
+                           department, photos)
+    for photo in result.photos:
+        if not photo.accepted:
+            print(f"    [SKIP] {photo.name}: {photo.reason}")
             continue
-
-        faces = detector.detect(img)
-        ok, reason = quality_check(img, faces)
-        if not ok:
-            print(f"    [SKIP] {path.name}: {reason}")
-            rejected += 1
-            continue
-
-        vector = embedder.embed(img, faces[0])
-        duplicate = next(
-            (i for i, v in enumerate(accepted) if float(np.dot(v, vector)) >= DUPLICATE_SIM),
-            None,
-        )
-        if duplicate is not None:
-            print(f"    [SKIP] {path.name}: nyaris identik dengan foto ke-{duplicate + 1}")
-            rejected += 1
-            continue
-
-        book.add_embedding(employee_id, vector, source=path.name)
-        accepted.append(vector)
-        print(f"    [OK]   {path.name}")
-
-    return len(accepted), rejected
+        print(f"    [OK]   {photo.name}")
+        for warning in photo.warnings:
+            print(f"    [WARN] {photo.name}: {warning}")
+    return result.accepted, len(result.rejected)
 
 
 def enroll_from_dir(book: AttendanceBook, detector, embedder, root: Path,
@@ -168,10 +125,20 @@ def enroll_from_webcam(book: AttendanceBook, detector, embedder, employee_id: st
             if not ok:
                 break
             faces = detector.detect(frame)
-            valid, reason = quality_check(frame, faces)
+            check = check_photo(frame, faces)
+            valid = check.accepted
+            reason = check.reason or check.describe()
 
             preview = frame.copy()
-            color = (0, 200, 0) if valid else (0, 0, 255)
+            # Kuning = boleh diambil tapi ada catatan. Membedakannya dari hijau
+            # membuat operator tahu ia bisa mencari frame yang lebih baik —
+            # tanpa memblokirnya kalau memang itu yang terbaik yang bisa didapat.
+            if not valid:
+                color = (0, 0, 255)
+            elif check.warnings:
+                color = (0, 200, 255)
+            else:
+                color = (0, 200, 0)
             for face in faces:
                 x1, y1, x2, y2 = face.bbox
                 cv2.rectangle(preview, (x1, y1), (x2, y2), color, 2)

@@ -97,12 +97,39 @@ venv\Scripts\activate
 python scripts/enroll_faces.py --webcam --id EMP001 --name "Budi Santoso" --department Produksi
 ```
 
-Lewat folder (satu subfolder per karyawan, nama folder = ID):
+Lewat folder — **`data\faces\`**, satu subfolder per karyawan. Nama foldernya
+menjadi `employee_id`:
+
+```
+data\faces\
+├─ EMP001\
+│  ├─ name.txt          (opsional — isi: "Budi Santoso")
+│  ├─ depan.jpg
+│  ├─ serong-kiri.jpg
+│  └─ serong-kanan.jpg
+└─ EMP002\
+   ├─ name.txt
+   └─ foto1.jpg
+```
 
 ```powershell
-# struktur: data\faces\EMP001\*.jpg, data\faces\EMP002\*.jpg
-python scripts/enroll_faces.py --dir data/faces
+mkdir data\faces\EMP001
+# salin foto-fotonya ke situ, lalu:
+python scripts/enroll_faces.py --dir data/faces --department Produksi
 ```
+
+Nama karyawan diambil dari `name.txt` di dalam foldernya; kalau tidak ada,
+dipakai nama foldernya sendiri (jadi `EMP002` di contoh atas akan tercatat
+bernama "EMP002"). Format gambar yang diterima: `.jpg .jpeg .png .bmp .webp` —
+file lain, termasuk `name.txt`, diabaikan.
+
+Foto **ditolak** kalau: wajah tidak terdeteksi, ada lebih dari satu wajah,
+wajah lebih kecil dari 80 px, atau nyaris identik dengan foto yang sudah
+diterima. Foto yang agak buram hanya **diperingatkan**, tetap dipakai. Aturan
+yang sama persis berlaku di UI Streamlit dan endpoint API.
+
+> `data\` ada di `.gitignore` dan `.dockerignore` — foto dan database biometrik
+> tidak akan pernah ikut ter-commit atau ter-bake ke dalam image.
 
 Lihat & hapus:
 

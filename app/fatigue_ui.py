@@ -32,6 +32,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.fatigue.attendance import AttendanceBook
+from src.fatigue.enrollment import MIN_ENROLL_FACE, enroll_photos
 from src.fatigue.face import FaceDetector, build_embedder
 from src.fatigue.fusion import FusionConfig, FusionWeights
 from src.fatigue.pipeline import FatiguePipeline, PipelineConfig
@@ -118,8 +119,15 @@ def load_attendance(embedder_backend: str) -> AttendanceBook:
 
 @st.cache_resource(show_spinner=False)
 def load_enrollment_tools(embedder_backend: str):
-    """Detektor + embedder khusus pendaftaran (ambang wajah lebih ketat)."""
-    return FaceDetector(min_face=60), build_embedder(embedder_backend)
+    """Detektor + embedder khusus pendaftaran.
+
+    `detect_width=None`: pendaftaran dilakukan sekali per karyawan dan
+    menentukan keandalan absensinya selamanya, jadi deteksi selalu di
+    resolusi penuh. Ambang ukuran wajah mengikuti `MIN_ENROLL_FACE` yang
+    sama dengan CLI dan API.
+    """
+    detector = FaceDetector(min_face=MIN_ENROLL_FACE // 2, detect_width=None)
+    return detector, build_embedder(embedder_backend)
 
 
 def init_state() -> None:
@@ -659,6 +667,13 @@ def run_employees(book: AttendanceBook, embedder_backend: str) -> None:
 
 
 def enroll(book, embedder_backend, employee_id, name, department, photos) -> None:
+    """Daftarkan foto lewat aturan bersama di `src.fatigue.enrollment`.
+
+    Validasinya sengaja tidak ditulis ulang di sini. Ketiga jalur pendaftaran
+    (UI, CLI, API) dulu punya aturannya masing-masing dan ketiganya berbeda,
+    sehingga karyawan yang didaftarkan lewat UI diam-diam mendapat kualitas
+    pendaftaran yang lebih rendah — dan tidak ada yang memberitahunya.
+    """
     if not employee_id or not name:
         st.error("ID dan nama wajib diisi.", icon=":material/error:")
         return
@@ -667,32 +682,28 @@ def enroll(book, embedder_backend, employee_id, name, department, photos) -> Non
         return
 
     detector, embedder = load_enrollment_tools(embedder_backend)
-    book.add_employee(employee_id, name, department)
+    decoded = [
+        (photo.name,
+         cv2.imdecode(np.frombuffer(photo.read(), np.uint8), cv2.IMREAD_COLOR))
+        for photo in photos
+    ]
+    result = enroll_photos(book, detector, embedder, employee_id, name,
+                           department, decoded)
 
-    accepted, rejected = 0, []
-    for photo in photos:
-        img = cv2.imdecode(np.frombuffer(photo.read(), np.uint8), cv2.IMREAD_COLOR)
-        if img is None:
-            rejected.append((photo.name, "file tidak terbaca"))
-            continue
-        faces = detector.detect(img)
-        if not faces:
-            rejected.append((photo.name, "wajah tidak terdeteksi atau terlalu kecil"))
-            continue
-        if len(faces) > 1:
-            rejected.append((photo.name, f"ada {len(faces)} wajah, harus satu orang"))
-            continue
-        book.add_embedding(employee_id, embedder.embed(img, faces[0]), source=photo.name)
-        accepted += 1
-
-    if accepted:
-        st.success(f"{accepted} foto terdaftar untuk {name}.",
+    if result.accepted:
+        st.success(f"{result.accepted} foto terdaftar untuk {name}.",
                    icon=":material/check_circle:")
     else:
-        st.error("Tidak ada foto yang bisa dipakai.", icon=":material/error:")
-    for filename, reason in rejected:
-        st.caption(f"Ditolak — `{filename}`: {reason}")
-    if accepted:
+        st.error(
+            "Tidak ada foto yang bisa dipakai — karyawan ini tetap dibuat, tapi "
+            "TIDAK akan pernah dikenali kamera sampai ada foto yang valid.",
+            icon=":material/error:",
+        )
+    for photo in result.rejected:
+        st.caption(f":material/close: `{photo.name}` — {photo.reason}")
+    for photo in result.warned:
+        st.caption(f":material/warning: `{photo.name}` — {'; '.join(photo.warnings)}")
+    if result.accepted:
         st.rerun()
 
 

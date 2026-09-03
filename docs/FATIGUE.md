@@ -526,11 +526,37 @@ similarity **tertinggi** di antaranya. Mendaftar 5–10 foto dari sudut dan
 cahaya berbeda membuat pengenalan jauh lebih tahan kondisi lapangan.
 
 **Kualitas pendaftaran berpengaruh jauh lebih besar pada keandalan absensi
-daripada model yang dipakai.** `scripts/enroll_faces.py` menolak foto yang
-wajahnya tidak terdeteksi, terlalu kecil (< 80 px), terlalu buram (variance
-Laplacian < 40), berisi lebih dari satu orang, atau nyaris identik dengan foto
-yang sudah ada — dan menyebutkan alasannya. Lebih baik ditolak sekarang
-daripada jadi karyawan yang "kadang tidak terbaca" selama berbulan-bulan.
+daripada model yang dipakai.** Foto **ditolak** kalau wajahnya tidak
+terdeteksi, ada lebih dari satu wajah, wajahnya lebih kecil dari 80 px, atau
+nyaris identik dengan foto yang sudah diterima — dan alasannya selalu
+disebutkan. Lebih baik ditolak sekarang daripada jadi karyawan yang "kadang
+tidak terbaca" berbulan-bulan.
+
+Foto yang agak buram hanya **diperingatkan**, tidak diblokir. Gerbang blur
+awalnya menolak (variance Laplacian < 40) dan itu keliru: sebuah frame webcam
+640×480 dengan wajah frontal dan jelas — yang terbukti dikenali dengan
+sempurna — hanya mendapat nilai 17, sementara foto internet terkurasi di
+dataset mendapat 90–1600. Metrik itu lebih banyak mengukur *asal* gambar
+(sensor webcam yang lembut vs foto yang sudah dipertajam) daripada
+kelayakannya. Diuji dengan blur Gaussian bertingkat pada foto yang sama,
+similarity embedding masih 0,62 pada kernel 21×21 — jauh di atas ambang
+pengenalan 0,40 — padahal ketajamannya sudah runtuh ke 3,1. Orang yang gagal
+mendaftar sama sekali tidak akan pernah dikenali kamera, jadi gerbang yang
+terlalu ketat lebih merugikan daripada foto yang kurang ideal.
+
+Metriknya juga diperbaiki: crop wajah dinormalisasi ke ukuran tetap sebelum
+diukur. Tanpa itu, nilainya justru **naik** saat wajah mengecil (tepi jadi
+lebih tajam relatif terhadap piksel) — sehingga wajah yang jauh dari kamera
+tampak lebih tajam daripada wajah yang sama dari dekat, dan ambang apa pun
+jadi bergantung pada jarak. Terukur: setelah normalisasi, nilai untuk citra
+yang sama di 400/240/120 px identik; tanpa normalisasi ia bervariasi 3,7×.
+
+Ketiga jalur pendaftaran — CLI, UI Streamlit, dan endpoint API — memanggil
+aturan yang sama di [`enrollment.py`](../src/fatigue/enrollment.py).
+Sebelumnya masing-masing punya aturannya sendiri dan ketiganya berbeda,
+sehingga karyawan yang didaftarkan lewat UI diam-diam mendapat validasi yang
+lebih longgar tanpa ada yang memberitahunya. Ada test yang memastikan
+duplikasi itu tidak tumbuh lagi.
 
 ### Ambang pengenalan
 
@@ -817,6 +843,7 @@ src/fatigue/
     temporal.py     jendela geser: PERCLOS, kedip, menguap, microsleep, kalibrasi
     fusion.py       skor tertimbang + aturan keras + histeresis + penjelasan
     attendance.py   SQLite: karyawan, embedding, log kehadiran
+    enrollment.py   validasi & pendaftaran foto — dipakai CLI, UI, dan API
     pipeline.py     orkestrasi + asosiasi track + rendering
     cli.py          CLI image/video/webcam
 
@@ -839,7 +866,8 @@ tests/
     test_fatigue_pipeline.py     asosiasi track, subsampling, integrasi absensi
     test_fatigue_face.py         penskalaan deteksi, filter ukuran, embedding
     test_fatigue_classifier.py   kesetaraan preprocessing training vs inferensi
+    test_fatigue_enrollment.py   aturan penerimaan foto, dan bahwa ketiganya sama
 
-104 test, semuanya jalan tanpa GPU. Yang butuh bobot atau checkpoint akan
+120 test, semuanya jalan tanpa GPU. Yang butuh bobot atau checkpoint akan
 di-skip, bukan gagal, kalau file-nya belum ada.
 ```

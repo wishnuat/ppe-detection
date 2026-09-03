@@ -25,6 +25,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse
 
 from src.fatigue.attendance import AttendanceBook
+from src.fatigue.enrollment import MIN_ENROLL_FACE, enroll_photos
 from src.fatigue.face import FaceDetector, build_embedder
 from src.fatigue.pipeline import FatiguePipeline, PipelineConfig
 
@@ -183,38 +184,26 @@ async def enroll(
     ini tidak pernah terbaca".
     """
     book = _book()
-    detector = FaceDetector(min_face=40)
+    detector = FaceDetector(min_face=MIN_ENROLL_FACE // 2, detect_width=None)
     embedder = build_embedder()
-    book.add_employee(employee_id, name, department)
 
-    accepted, rejected = 0, []
-    for upload in files:
-        img = _decode(await upload.read())
-        faces = detector.detect(img)
-        if not faces:
-            rejected.append({"file": upload.filename, "reason": "wajah tidak terdeteksi"})
-            continue
-        if len(faces) > 1:
-            rejected.append({"file": upload.filename,
-                             "reason": f"ada {len(faces)} wajah, harus satu orang"})
-            continue
-        book.add_embedding(employee_id, embedder.embed(img, faces[0]),
-                           source=upload.filename or "")
-        accepted += 1
+    decoded = [(upload.filename or "", _decode(await upload.read()))
+               for upload in files]
+    result = enroll_photos(book, detector, embedder, employee_id, name,
+                           department, decoded)
 
-    if accepted == 0:
+    if result.accepted == 0:
         raise HTTPException(
             status_code=400,
-            detail={"message": "Tidak ada foto yang bisa dipakai", "rejected": rejected},
+            detail={"message": "Tidak ada foto yang bisa dipakai",
+                    **result.to_dict()},
         )
-    return {
-        "employee_id": employee_id, "name": name,
-        "accepted": accepted, "rejected": rejected,
-        "total_embeddings": next(
-            (e.num_embeddings for e in book.list_employees()
-             if e.employee_id == employee_id), 0
-        ),
-    }
+    payload = result.to_dict()
+    payload["total_embeddings"] = next(
+        (e.num_embeddings for e in book.list_employees()
+         if e.employee_id == employee_id), 0
+    )
+    return payload
 
 
 @router.delete("/employees/{employee_id}")
