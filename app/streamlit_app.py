@@ -41,6 +41,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.alerts import AlertEngine, SessionStats, events_to_csv
 from src.backends import build_detector
+from src.camera import CameraOpenError, describe_camera, open_camera
 from src.detector import (
     PPE_CLASSES,
     RAW_LABEL_MAP,
@@ -800,16 +801,16 @@ def run_webcam_realtime(detector: PPEDetector, engine: AlertEngine, cfg: dict) -
         render_snapshots(engine)
         return
 
-    # CAP_DSHOW = backend DirectShow Windows; jauh lebih cepat dibuka daripada
-    # MSMF default. Di OS lain fallback ke backend bawaan.
-    cap = cv2.VideoCapture(int(camera_index), cv2.CAP_DSHOW)
-    if not cap.isOpened():
-        cap.release()
-        cap = cv2.VideoCapture(int(camera_index))
-    if not cap.isOpened():
+    # Lewat `src.camera` yang mencoba beberapa backend dengan batas waktu.
+    # Membuka DirectShow langsung bisa menggantung selamanya di Windows, dan
+    # di Streamlit itu membekukan seluruh halaman tanpa pesan apa pun.
+    try:
+        cap, backend = open_camera(int(camera_index), warn=st.warning)
+    except CameraOpenError as exc:
         st.session_state.cam_running = False
-        st.error(f"Gagal membuka kamera index {camera_index}.")
+        st.error(str(exc))
         return
+    st.caption(f"Kamera: {backend} · {describe_camera(cap)}")
 
     writer = None
     if record:

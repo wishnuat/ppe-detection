@@ -42,14 +42,21 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.camera import (  # noqa: E402
+    CameraOpenError,
+    describe_camera,
+    open_camera,
+)
 from src.fatigue.attendance import AttendanceBook  # noqa: E402
 from src.fatigue.enrollment import (  # noqa: E402
+    DUPLICATE_SIM,
     IMAGE_SUFFIXES,
     MIN_ENROLL_FACE,
     check_photo,
     enroll_photos,
 )
 from src.fatigue.face import FaceDetector, build_embedder  # noqa: E402
+
 
 def enroll_images(
     book: AttendanceBook,
@@ -107,11 +114,11 @@ def enroll_from_dir(book: AttendanceBook, detector, embedder, root: Path,
 def enroll_from_webcam(book: AttendanceBook, detector, embedder, employee_id: str,
                        name: str, department: str, shots: int, camera_index: int) -> int:
     """Ambil beberapa foto pendaftaran langsung dari webcam."""
-    cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
-    if not cap.isOpened():
-        cap = cv2.VideoCapture(camera_index)
-    if not cap.isOpened():
-        raise SystemExit(f"[ERROR] Gagal membuka kamera index {camera_index}")
+    try:
+        cap, backend = open_camera(camera_index)
+    except CameraOpenError as exc:
+        raise SystemExit(f"[ERROR] {exc}") from exc
+    print(f"[INFO] Kamera terbuka lewat {backend}: {describe_camera(cap)}")
 
     book.add_employee(employee_id, name, department)
     print(f"[INFO] Tekan SPASI untuk mengambil foto ({shots} kali), 'q' untuk berhenti.")

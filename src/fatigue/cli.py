@@ -21,12 +21,20 @@ from pathlib import Path
 
 import cv2
 
+from src.camera import CameraOpenError, describe_camera, open_camera
 from src.fatigue.attendance import AttendanceBook
 from src.fatigue.pipeline import FatiguePipeline, PipelineConfig
 from src.fatigue.types import FatigueLevel
 
 
 def build(args: argparse.Namespace) -> FatiguePipeline:
+    """Bangun pipeline, sambil mengabari apa yang sedang dikerjakan.
+
+    Memuat empat model butuh beberapa detik, dan membuka kamera beberapa detik
+    lagi. Tanpa tanda apa pun di layar selama itu, pemakai wajar menyimpulkan
+    programnya menggantung — jadi tiap langkah lambat diumumkan sebelum
+    dimulai, bukan sesudah.
+    """
     config = PipelineConfig(
         window_seconds=args.window,
         enable_attendance=not args.no_attendance,
@@ -37,13 +45,29 @@ def build(args: argparse.Namespace) -> FatiguePipeline:
     attendance = None
     if config.enable_attendance and args.db:
         attendance = AttendanceBook(db_path=args.db)
+
+    print("[INFO] Memuat model wajah (beberapa detik pertama kali)…", flush=True)
     pipeline = FatiguePipeline(
         config=config,
         attendance=attendance,
         embedder_backend=args.embedder,
         classifier_backend=args.classifier_backend,
     )
-    print("[INFO] " + json.dumps(pipeline.describe(), ensure_ascii=False))
+
+    parts = [
+        f"deteksi wajah YuNet",
+        f"landmark MediaPipe",
+        f"absensi {pipeline.embedder.backend}" if pipeline.embedder else "absensi MATI",
+        (f"CNN {pipeline.classifier.backend}" if pipeline.classifier
+         else "CNN MATI (pakai --classifier untuk menyalakan)"),
+    ]
+    print(f"[INFO] Siap: {' · '.join(parts)}", flush=True)
+    if pipeline.attendance is not None:
+        stats = pipeline.attendance.stats()
+        print(f"[INFO] Terdaftar: {stats['active_employees']} karyawan aktif, "
+              f"{stats['embeddings']} foto wajah", flush=True)
+    if args.verbose:
+        print("[INFO] " + json.dumps(pipeline.describe(), ensure_ascii=False))
     return pipeline
 
 
@@ -115,26 +139,44 @@ def run_video(pipeline: FatiguePipeline, path: str, out: str | None,
             print(f"    {name:28s} {level.value}")
 
 
+WINDOW_TITLE = "Fatigue Detection"
+
+
 def run_webcam(pipeline: FatiguePipeline, index: int, save: str | None) -> None:
-    cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
-    if not cap.isOpened():
-        cap = cv2.VideoCapture(index)
-    if not cap.isOpened():
-        raise SystemExit(f"[ERROR] Gagal membuka kamera index {index}")
+    print(f"[INFO] Membuka kamera index {index}…", flush=True)
+    try:
+        cap, backend = open_camera(index)
+    except CameraOpenError as exc:
+        raise SystemExit(f"[ERROR] {exc}") from exc
+    print(f"[INFO] Kamera terbuka lewat {backend}: {describe_camera(cap)}",
+          flush=True)
 
     writer = None
     if save:
         Path(save).parent.mkdir(parents=True, exist_ok=True)
 
-    print("[INFO] Tekan 'q' untuk berhenti, 's' untuk snapshot.")
+    # Window dibuat eksplisit lalu diangkat ke depan sebentar. Tanpa ini ia
+    # sering terbuka DI BELAKANG terminal — pemakai tidak melihat apa-apa dan
+    # menyimpulkan programnya tidak jalan, padahal sudah jalan.
+    cv2.namedWindow(WINDOW_TITLE, cv2.WINDOW_AUTOSIZE)
+    try:
+        cv2.setWindowProperty(WINDOW_TITLE, cv2.WND_PROP_TOPMOST, 1)
+    except cv2.error:
+        pass    # tidak semua build punya properti ini; bukan alasan gagal
+
+    print(f"[INFO] Window '{WINDOW_TITLE}' terbuka — kalau tidak terlihat, "
+          "cek taskbar.", flush=True)
+    print("[INFO] Tekan 'q' di window itu untuk berhenti, 's' untuk snapshot.",
+          flush=True)
     print("[INFO] Beberapa detik pertama dipakai untuk kalibrasi mata — "
-          "level akan TIDAK_DIKETAHUI sampai datanya cukup.")
+          "level akan TIDAK_DIKETAHUI sampai datanya cukup.", flush=True)
 
     prev_levels: dict[str, FatigueLevel] = {}
     # `recent_checkins` hanya menahan 50 terakhir, jadi indeks ini bisa
     # tertinggal di belakang kalau sesinya sangat ramai — konsekuensinya cuma
     # beberapa baris log tidak tercetak, sedangkan datanya tetap utuh di DB.
     printed_checkins = 0
+    shown = False
     t_prev = time.perf_counter()
     fps = 0.0
     try:
@@ -155,13 +197,21 @@ def run_webcam(pipeline: FatiguePipeline, index: int, save: str | None) -> None:
             # Hanya cetak saat level seseorang BERUBAH, bukan tiap frame.
             for person in analysis.people:
                 key = person.identity.employee_id or person.identity.name
-                if prev_levels.get(key) is not person.level:
+                previous = prev_levels.get(key)
+                if previous is not person.level:
                     prev_levels[key] = person.level
                     if person.level.severity >= FatigueLevel.MILD.severity:
                         print(f"[ALERT] {person.identity.name}: {person.level.value} "
                               f"— {'; '.join(person.reasons)}")
                     elif person.level is FatigueLevel.ALERT:
-                        print(f"[OK]    {person.identity.name}: kembali segar")
+                        # "kembali segar" hanya benar kalau sebelumnya memang
+                        # tidak segar. Pada transisi pertama dari
+                        # TIDAK_DIKETAHUI, kalimat itu menyiratkan orangnya
+                        # tadi lelah — padahal sistemnya cuma belum tahu.
+                        if previous is not None and previous.severity > 0:
+                            print(f"[OK]    {person.identity.name}: kembali segar")
+                        else:
+                            print(f"[OK]    {person.identity.name}: terpantau segar")
 
             while printed_checkins < len(pipeline.recent_checkins):
                 record = pipeline.recent_checkins[printed_checkins]
@@ -177,7 +227,16 @@ def run_webcam(pipeline: FatiguePipeline, index: int, save: str | None) -> None:
                     )
                 writer.write(annotated)
 
-            cv2.imshow("Fatigue Detection", annotated)
+            cv2.imshow(WINDOW_TITLE, annotated)
+            if not shown:
+                # Topmost hanya untuk memastikan frame pertama terlihat.
+                # Membiarkannya menempel di atas semua jendela lain sepanjang
+                # sesi justru menyebalkan.
+                shown = True
+                try:
+                    cv2.setWindowProperty(WINDOW_TITLE, cv2.WND_PROP_TOPMOST, 0)
+                except cv2.error:
+                    pass
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
                 break
@@ -210,6 +269,8 @@ def main() -> None:
     ap.add_argument("--max-faces", type=int, default=8)
     ap.add_argument("--camera-name", type=str, default="",
                     help="Label kamera yang ikut tercatat di log absensi.")
+    ap.add_argument("--verbose", action="store_true",
+                    help="Cetak juga path lengkap tiap model sebagai JSON.")
     ap.add_argument("--no-attendance", action="store_true",
                     help="Matikan absensi (tidak memuat model embedding 37 MB).")
     ap.add_argument("--classifier", action=argparse.BooleanOptionalAction,

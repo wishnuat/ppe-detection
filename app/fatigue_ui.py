@@ -31,6 +31,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.camera import CameraOpenError, describe_camera, open_camera
 from src.fatigue.attendance import AttendanceBook
 from src.fatigue.enrollment import MIN_ENROLL_FACE, enroll_photos
 from src.fatigue.face import FaceDetector, build_embedder
@@ -397,14 +398,13 @@ def run_webcam(pipeline: FatiguePipeline, cfg: dict) -> None:
         render_alert_log(alert_slot)
         return
 
-    cap = cv2.VideoCapture(int(camera_index), cv2.CAP_DSHOW)
-    if not cap.isOpened():
-        cap.release()
-        cap = cv2.VideoCapture(int(camera_index))
-    if not cap.isOpened():
+    try:
+        cap, backend = open_camera(int(camera_index), warn=st.warning)
+    except CameraOpenError as exc:
         st.session_state.fatigue_running = False
-        st.error(f"Gagal membuka kamera index {camera_index}.")
+        st.error(str(exc))
         return
+    st.caption(f"Kamera: {backend} · {describe_camera(cap)}")
 
     writer = None
     if record:

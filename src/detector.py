@@ -12,6 +12,8 @@ import numpy as np
 from dotenv import load_dotenv
 from ultralytics import YOLO
 
+from src.camera import describe_camera, open_camera
+
 load_dotenv()
 
 # Kategori kepatuhan yang dilaporkan ke user.
@@ -298,11 +300,12 @@ class PPEDetector:
         return out
 
     def predict_webcam(self, camera_index: int = 0, save_video: str | None = None) -> None:
-        cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
-        if not cap.isOpened():
-            cap = cv2.VideoCapture(camera_index)
-        if not cap.isOpened():
-            raise RuntimeError(f"Gagal membuka kamera index {camera_index}")
+        # Lewat `src.camera`, bukan cv2.VideoCapture langsung: pembukaan
+        # DirectShow bisa menggantung tanpa batas waktu di Windows setelah
+        # aplikasi di-restart cepat, dan gejalanya terlihat seperti program
+        # yang rusak. Lihat catatan pengukuran di src/camera.py.
+        cap, backend = open_camera(camera_index)
+        print(f"[INFO] Kamera terbuka lewat {backend}: {describe_camera(cap)}")
 
         # FPS rekaman tidak bisa ditebak di muka: tergantung backend, resolusi,
         # dan beban CPU saat itu. Kalau di-hardcode, durasi video hasil tidak

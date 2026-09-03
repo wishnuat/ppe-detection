@@ -186,7 +186,7 @@ curl.exe http://localhost:8000/fatigue/attendance
 cd "C:\Users\HP\Documents\PPE Detection"
 venv\Scripts\activate
 
-pytest tests -q                    # semua (180 test)
+pytest tests -q                    # semua (189 test)
 pytest tests -k fatigue -q         # modul fatigue saja (129 test)
 pytest tests/test_fatigue_temporal.py -v
 ```
@@ -253,6 +253,7 @@ Hasilnya ke `outputs/fatigue/benchmark*.json`, terurai per komponen.
 | `cv2.__version__` jadi `5.x` | mediapipe dipasang tanpa `--no-deps` dan menimpa opencv. Perbaiki: `pip uninstall -y opencv-contrib-python opencv-python-headless; pip install opencv-python==4.10.0.84` |
 | `Checkpoint fatigue tidak ditemukan` | Belum dilatih. Jalankan bagian 7, atau pakai `--no-classifier` untuk mode sinyal perilaku saja. |
 | Level selalu `TIDAK_DIKETAHUI` | Wajah belum terlihat ≥ 5 detik, atau < 40% frame menghasilkan landmark. Dekatkan wajah ke kamera dan hadap depan. |
-| Webcam gagal dibuka | Coba `--index 1` atau `--index 2`. Pastikan aplikasi lain (Zoom/Teams) tidak sedang memakai kamera. |
+| Webcam gagal dibuka | Pesan errornya menyebutkan apa yang bisa dicoba. Ringkasnya: `--index 1` atau `2` (banyak laptop punya kamera inframerah terpisah untuk Windows Hello — itu tidak cocok), tutup Zoom/Teams/Chrome, atau tunggu ~10 detik kalau baru saja menutup aplikasi ini. |
+| Program diam setelah "Membuka kamera" | Sudah diperbaiki. `cv2.VideoCapture` bisa menggantung selamanya di Windows setelah restart cepat; sekarang tiap backend dibatasi 8 detik lalu dicoba yang berikutnya. Kalau masih terjadi, laporkan output `[WARN]`-nya. |
 | Streamlit lambat / FPS rendah | Wajar — lihat [Performa](FATIGUE.md#performa). Turunkan "Batas FPS" di sidebar. |
 | Level naik padahal saya segar | Pastikan toggle "Pakai CNN penampakan wajah" **mati** (default). CNN terukur menandai 59% wajah nyata sebagai lelah — lihat [alasannya](FATIGUE.md#cnn-dimatikan-secara-default--inilah-alasannya). |
